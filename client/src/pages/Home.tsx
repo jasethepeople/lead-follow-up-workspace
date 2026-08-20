@@ -2,7 +2,7 @@
  * Brass & Ledger design system: an editorial client-workspace with warm paper surfaces,
  * ink-navy structure, and Ledger Vermilion reserved for active actions and priorities.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   BriefcaseBusiness,
@@ -164,6 +164,38 @@ export default function Home() {
   const [testDone, setTestDone] = useState<number[]>([0]);
   const [notice, setNotice] = useState("Your workspace is ready for the next move.");
   const [scopeFields, setScopeFields] = useState({ business: "[Client legal name]", source: "website inquiry form", tool: "their existing shared inbox" });
+  const [projectComplete, setProjectComplete] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const raw = window.localStorage.getItem("leadflow-workspace-state");
+    if (raw) {
+      try {
+        const saved = JSON.parse(raw) as {
+          prospects?: typeof initialProspects;
+          doneDays?: number[];
+          checkedKickoff?: number[];
+          testDone?: number[];
+          scopeFields?: typeof scopeFields;
+          projectComplete?: boolean;
+        };
+        if (Array.isArray(saved.prospects)) setProspects(saved.prospects);
+        if (Array.isArray(saved.doneDays)) setDoneDays(saved.doneDays);
+        if (Array.isArray(saved.checkedKickoff)) setCheckedKickoff(saved.checkedKickoff);
+        if (Array.isArray(saved.testDone)) setTestDone(saved.testDone);
+        if (saved.scopeFields) setScopeFields(saved.scopeFields);
+        if (typeof saved.projectComplete === "boolean") setProjectComplete(saved.projectComplete);
+      } catch {
+        window.localStorage.removeItem("leadflow-workspace-state");
+      }
+    }
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem("leadflow-workspace-state", JSON.stringify({ prospects, doneDays, checkedKickoff, testDone, scopeFields, projectComplete }));
+  }, [hydrated, prospects, doneDays, checkedKickoff, testDone, scopeFields, projectComplete]);
 
   const progress = Math.round((doneDays.length / deliveryDays.length) * 100);
   const activeLabel = navItems.find((item) => item.key === active)?.label ?? "Workspace";
@@ -200,6 +232,29 @@ export default function Home() {
     () => `7-Day Lead Follow-Up Tune-Up\n\nClient: ${scopeFields.business}\nPrimary lead source: ${scopeFields.source}\nAgreed tool: ${scopeFields.tool}\n\nIncluded: one 45-minute kickoff, one workflow summary, three customer messages, one simple tracker/workflow, up to three tests, and a 30-minute handoff.\n\nFixed fee: $350. The scope excludes new software subscriptions, paid advertising, custom code, complex integrations, multiple lead sources, and work not approved in writing.`,
     [scopeFields],
   );
+
+  const completionReady = doneDays.length === deliveryDays.length && testDone.length === 5 && checkedKickoff.length === kickoffRows.length;
+
+  const downloadClientPackage = () => {
+    const packageText = `LEADFLOW CLIENT PACKAGE\n\n${scopeCopy}\n\nONBOARDING QUESTIONS\nBusiness name:\nPrimary project contact:\nOne lead source in scope:\nWhat happens after a new inquiry arrives?\nWho responds today?\nIdeal customer:\nRequired tone:\nWhat must not be said?\nExisting tool:\nWho can provide invitation-based access?\nBest handoff time:\n\nKICKOFF RECAP\nWe are improving [one lead source] using [tool]. Goal: [outcome]. Draft messages due [date]. Workflow test due [date]. Handoff: [date].\n\nINITIAL RESPONSE\n${messageTemplates[0].body}\n\nFOLLOW-UP\n${messageTemplates[1].body}\n\nFINAL CHECK-IN\n${messageTemplates[2].body}\n\nCLOSEOUT\nYour 7-Day Lead Follow-Up Tune-Up is complete. Attached or linked are the workflow summary, three approved message templates, the agreed tracker/workflow instructions, test confirmation, and the operating guide.`;
+    const file = new Blob([packageText], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "leadflow-client-package.txt";
+    link.click();
+    URL.revokeObjectURL(url);
+    setNotice("Client package downloaded. Replace the bracketed fields before sending.");
+  };
+
+  const completeProject = () => {
+    if (!completionReady) {
+      setNotice("Finish all 8 kickoff items, 7 delivery milestones, and 5 tests before closing the project.");
+      return;
+    }
+    setProjectComplete(true);
+    setNotice("Client project marked complete and ready to archive.");
+  };
 
   const renderContent = () => {
     switch (active) {
@@ -267,9 +322,9 @@ export default function Home() {
               <img src={ASSETS.logo} alt="LeadFlow" className="h-10 w-10 rounded-xl object-cover" />
               <div className="min-w-0"><p className="font-display text-2xl tracking-[-0.05em]">LeadFlow</p><p className="truncate text-[9px] font-extrabold uppercase tracking-[0.16em] text-[#897d6d]">{activeLabel}</p></div>
             </div>
-            <div className="hidden items-center gap-2 lg:flex"><span className="h-2 w-2 rounded-full bg-[#6eaa87]" /><span className="text-xs font-bold text-[#716858]">Local workspace · everything saved in this session</span></div>
+            <div className="hidden items-center gap-2 lg:flex"><span className="h-2 w-2 rounded-full bg-[#6eaa87]" /><span className="text-xs font-bold text-[#716858]">Local workspace · progress saved in this browser</span></div>
             <div className="flex items-center gap-2">
-              <button className="hidden rounded-full border border-[#ded6c9] bg-[#f9f6ef] p-2 text-[#6f685c] transition hover:border-[#c44832] hover:text-[#c44832] sm:block" aria-label="Workspace settings"><Settings2 className="h-4 w-4" /></button>
+              <button onClick={downloadClientPackage} className="hidden items-center gap-2 rounded-full border border-[#ded6c9] bg-[#f9f6ef] px-3 py-2 text-xs font-extrabold text-[#6f685c] transition hover:border-[#c44832] hover:text-[#c44832] sm:inline-flex" aria-label="Export client package"><FilePenLine className="h-4 w-4" />Export kit</button>
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#173b49] text-xs font-extrabold text-white">YO</div>
             </div>
           </header>
@@ -280,7 +335,9 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="mx-auto max-w-[1300px]">{renderContent()}</div>
+          <div className="mx-auto max-w-[1300px]">{renderContent()}
+            {active === "closeout" && <section className={`mt-7 rounded-[26px] border p-6 ${projectComplete ? "border-[#b8d9c4] bg-[#edf6ef]" : "border-[#ded6c9] bg-[#fbf8f0]"}`}><div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div className="flex items-start gap-4"><div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${projectComplete ? "bg-[#3e7a5d] text-white" : "bg-[#f3e4db] text-[#c44832]"}`}>{projectComplete ? <CheckCheck className="h-5 w-5" /> : <ClipboardCheck className="h-5 w-5" />}</div><div><Pill tone={projectComplete ? "green" : "warm"}>{projectComplete ? "Client file complete" : "Final completion gate"}</Pill><h2 className="mt-3 font-display text-3xl tracking-[-0.045em] text-[#183b4a]">{projectComplete ? "This client file is ready to archive." : "Close the client file only when every proof point is logged."}</h2><p className="mt-2 text-sm leading-6 text-[#71685d]">Kickoff: {checkedKickoff.length}/8 · Delivery: {doneDays.length}/7 · Tests: {testDone.length}/5. This state is saved in your browser.</p></div></div><Button onClick={completeProject} className={`h-11 rounded-xl ${projectComplete ? "bg-[#3e7a5d] text-white hover:bg-[#316247]" : "bg-[#c44832] text-white hover:bg-[#a83b2a]"}`}>{projectComplete ? <><CheckCheck className="mr-2 h-4 w-4" />Project complete</> : <><ClipboardCheck className="mr-2 h-4 w-4" />Complete client file</>}</Button></div></section>}
+          </div>
         </main>
       </div>
 
@@ -304,7 +361,7 @@ export default function Home() {
 
 function Briefing({ progress, setActive, doneDays }: { progress: number; setActive: (view: View) => void; doneDays: number }) {
   return <>
-    <SectionTop eyebrow="00 · The active desk" title="Turn a warm observation into a booked kickoff." detail="LeadFlow puts every piece of your focused $350 service in one working path, so you can spend less time rebuilding documents and more time following through." action={<Button onClick={() => setActive("prospects")} className="h-11 rounded-xl bg-[#c44832] px-5 text-white hover:bg-[#a83b2a]"><Plus className="mr-2 h-4 w-4" />New prospect</Button>} />
+    <SectionTop eyebrow="00 · The active desk" title="Turn a warm observation into a booked kickoff." detail="LeadFlow puts every piece of your focused $350 service in one working path, so you can spend less time rebuilding documents and more time following through." action={<Button onClick={() => setActive("prospects")} className="action-tab h-11 rounded-none bg-[#c44832] px-5 text-white hover:bg-[#a83b2a]"><Plus className="mr-2 h-4 w-4" />New prospect</Button>} />
     <section className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
       <div className="relative overflow-hidden rounded-[26px] border border-[#dfd7ca] bg-[#f9f5ed] p-6 shadow-[0_18px_50px_rgba(73,58,38,0.08)] sm:p-8">
         <img src={ASSETS.hero} alt="LeadFlow editorial desk" className="absolute inset-y-0 right-0 h-full w-[52%] object-cover opacity-70 mix-blend-multiply" />
@@ -313,12 +370,13 @@ function Briefing({ progress, setActive, doneDays }: { progress: number; setActi
       </div>
       <div className="rounded-[26px] bg-[#183b4a] p-6 text-[#fffaf1] shadow-[0_18px_50px_rgba(24,57,72,0.18)] sm:p-7"><div className="flex items-center justify-between"><Pill tone="warm">Delivery pulse</Pill><TimerReset className="h-5 w-5 text-[#f5b19f]" /></div><p className="mt-6 text-sm font-bold text-[#c7d7d8]">Your current seven-day run</p><div className="mt-2 flex items-end gap-2"><span className="font-display text-6xl tracking-[-0.07em]">{progress}%</span><span className="mb-2 text-xs font-bold text-[#a5bebf]">{doneDays} of 7 milestones</span></div><div className="mt-5 h-3 overflow-hidden rounded-full bg-white/15"><div className="h-full rounded-full bg-[#ef8066] transition-all duration-500" style={{ width: `${progress}%` }} /></div><button onClick={() => setActive("delivery")} className="mt-7 flex w-full items-center justify-between rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-left text-sm font-extrabold transition hover:bg-white/15">Continue delivery plan <ChevronRight className="h-4 w-4" /></button></div>
     </section>
-    <section className="mt-7 grid gap-5 lg:grid-cols-3"><Metric icon={Target} label="Prospects to write" value="2" note="from a focused list of 3" color="text-[#c44832]" /><Metric icon={Mail} label="Useful first moves" value="5" note="personalized, not mass sent" color="text-[#3e6e5a]" /><Metric icon={ClipboardCheck} label="Delivery assets" value="9" note="already prepared and reusable" color="text-[#62518c]" /></section>
-    <section className="mt-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]"><div className="rounded-[26px] border border-[#ded6c9] bg-[#fbf8f0] p-6"><div className="flex items-center justify-between"><div><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#9a8b78]">Working queue</p><h2 className="mt-2 font-display text-3xl tracking-[-0.045em]">Three moves that matter</h2></div><button onClick={() => setActive("prospects")} className="text-xs font-extrabold text-[#b6402e]">See prospects</button></div><div className="mt-5 divide-y divide-[#e8e0d4]"><QueueRow number="01" title="Write Cedar & Stone" detail="Use its quote-form observation to open a useful email." action="Draft message" onClick={() => setActive("templates")} /><QueueRow number="02" title="Prepare the scope" detail="Replace bracketed fields before your first serious reply." action="Open builder" onClick={() => setActive("scope")} /><QueueRow number="03" title="Book the kickoff" detail="Use the 45-minute agenda to protect the seven-day window." action="Open desk" onClick={() => setActive("kickoff")} /></div></div><div className="overflow-hidden rounded-[26px] border border-[#ded6c9] bg-[#fbf8f0]"><img src={ASSETS.workflow} alt="Lead workflow stationery illustration" className="h-44 w-full object-cover" /><div className="p-6"><Pill tone="green">Operate calmly</Pill><h2 className="mt-4 font-display text-3xl leading-7 tracking-[-0.045em]">Every asset is already waiting in the right step.</h2><p className="mt-3 text-sm leading-6 text-[#6c6256]">Your prospect research, client documents, messages, delivery tracker, and closeout plan stay connected.</p><button onClick={() => setActive("onboarding")} className="mt-5 inline-flex items-center gap-2 text-sm font-extrabold text-[#183b4a]">Start client onboarding <ArrowRight className="h-4 w-4" /></button></div></div></section>
+    <section className="next-move-ledger mt-7 grid gap-4 p-5 md:grid-cols-[auto_1fr_auto] md:items-center"><div className="next-move-stamp">NEXT<br />MOVE</div><div><p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#c44832]">Field instruction · owner: you</p><h2 className="mt-1 font-display text-3xl tracking-[-0.045em] text-[#183b4a]">Write a specific opening for Cedar & Stone.</h2><p className="mt-1 text-sm leading-5 text-[#6d6257]">Use the quote-form observation. Offer three useful ideas, not a generic sales pitch.</p></div><button onClick={() => setActive("templates")} className="action-tab inline-flex items-center justify-center gap-2 bg-[#c44832] px-5 py-3 text-sm font-extrabold text-white hover:bg-[#a83b2a]">Draft message <ArrowRight className="h-4 w-4" /></button></section>
+    <section className="mt-7 grid divide-y divide-[#ded6c9] border-y border-[#ded6c9] bg-[#f7f3eb] lg:grid-cols-3 lg:divide-x lg:divide-y-0"><Metric icon={Target} label="Prospects to write" value="2" note="from a focused list of 3" color="text-[#c44832]" /><Metric icon={Mail} label="Useful first moves" value="5" note="personalized, not mass sent" color="text-[#3e6e5a]" /><Metric icon={ClipboardCheck} label="Delivery assets" value="9" note="already prepared and reusable" color="text-[#62518c]" /></section>
+    <section className="mt-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]"><div className="ledger-sheet p-6"><div className="flex items-center justify-between"><div><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#9a8b78]">Working queue · indexed</p><h2 className="mt-2 font-display text-3xl tracking-[-0.045em]">Three moves that matter</h2></div><button onClick={() => setActive("prospects")} className="text-xs font-extrabold text-[#b6402e]">See prospects</button></div><div className="mt-5 divide-y divide-[#e8e0d4]"><QueueRow number="01" title="Write Cedar & Stone" detail="Use its quote-form observation to open a useful email." action="Draft message" onClick={() => setActive("templates")} /><QueueRow number="02" title="Prepare the scope" detail="Replace bracketed fields before your first serious reply." action="Open builder" onClick={() => setActive("scope")} /><QueueRow number="03" title="Book the kickoff" detail="Use the 45-minute agenda to protect the seven-day window." action="Open desk" onClick={() => setActive("kickoff")} /></div></div><div className="field-note overflow-hidden"><img src={ASSETS.workflow} alt="Lead workflow stationery illustration" className="h-44 w-full object-cover" /><div className="p-6"><Pill tone="green">Operate calmly</Pill><h2 className="mt-4 font-display text-3xl leading-7 tracking-[-0.045em]">Every asset is already waiting in the right step.</h2><p className="mt-3 text-sm leading-6 text-[#6c6256]">Your prospect research, client documents, messages, delivery tracker, and closeout plan stay connected.</p><button onClick={() => setActive("onboarding")} className="mt-5 inline-flex items-center gap-2 text-sm font-extrabold text-[#183b4a]">Start client onboarding <ArrowRight className="h-4 w-4" /></button></div></div></section>
   </>;
 }
 
-function Metric({ icon: Icon, label, value, note, color }: { icon: typeof Target; label: string; value: string; note: string; color: string }) { return <div className="rounded-2xl border border-[#ded6c9] bg-[#fbf8f0] p-5"><Icon className={`h-5 w-5 ${color}`} /><div className="mt-4 font-display text-4xl tracking-[-0.06em] text-[#173b49]">{value}</div><div className="mt-1 text-sm font-extrabold text-[#514f49]">{label}</div><p className="mt-1 text-xs text-[#8b8172]">{note}</p></div>; }
+function Metric({ icon: Icon, label, value, note, color }: { icon: typeof Target; label: string; value: string; note: string; color: string }) { return <div className="ledger-metric p-5"><div className="flex items-center justify-between"><Icon className={`h-5 w-5 ${color}`} /><span className="text-[9px] font-extrabold tracking-[0.14em] text-[#ad9e8b]">FIELD COUNT</span></div><div className="mt-4 font-display text-4xl tracking-[-0.06em] text-[#173b49]">{value}</div><div className="mt-1 text-sm font-extrabold text-[#514f49]">{label}</div><p className="mt-1 text-xs text-[#8b8172]">{note}</p></div>; }
 function QueueRow({ number, title, detail, action, onClick }: { number: string; title: string; detail: string; action: string; onClick: () => void }) { return <div className="flex gap-4 py-4 first:pt-0 last:pb-0"><span className="pt-0.5 text-xs font-extrabold tracking-[0.1em] text-[#c44832]">{number}</span><div className="min-w-0 flex-1"><h3 className="text-sm font-extrabold text-[#183b4a]">{title}</h3><p className="mt-1 text-xs leading-5 text-[#7a7165]">{detail}</p></div><button onClick={onClick} className="self-center whitespace-nowrap text-xs font-extrabold text-[#b6402e] hover:underline">{action}</button></div>; }
 
 function Prospects({ prospects, onOpen, onWrite }: { prospects: typeof initialProspects; onOpen: () => void; onWrite: (business: string) => void }) { return <><SectionTop eyebrow="01 · Prospecting" title="Find the signal before you pitch." detail="Use a public, specific observation as the opening—not a generic claim about helping businesses grow. Track the next move while the detail is still fresh." action={<Button onClick={onOpen} className="h-11 rounded-xl bg-[#c44832] text-white hover:bg-[#a83b2a]"><Plus className="mr-2 h-4 w-4" />Capture prospect</Button>} /><div className="grid gap-6 xl:grid-cols-[1fr_320px]"><div className="overflow-hidden rounded-[26px] border border-[#ded6c9] bg-[#fbf8f0]"><div className="flex flex-col gap-4 border-b border-[#e4ddd1] p-5 sm:flex-row sm:items-center sm:justify-between"><div className="relative max-w-sm flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9b8f7e]" /><input placeholder="Search your working list" className="w-full rounded-xl border border-[#ded5c8] bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:border-[#c44832]" /></div><div className="flex gap-2"><Pill tone="ink">3 active</Pill><button className="rounded-xl border border-[#ded5c8] bg-white px-3 py-2 text-xs font-extrabold text-[#625c52]"><Settings2 className="mr-1 inline h-3.5 w-3.5" />Filter</button></div></div><div className="hidden grid-cols-[1.3fr_1fr_1.3fr_0.9fr_40px] gap-4 border-b border-[#e4ddd1] bg-[#f3eee5] px-5 py-3 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#978a78] md:grid"><span>Business</span><span>Niche</span><span>Observed signal</span><span>Next move</span><span /></div><div className="divide-y divide-[#e7dfd3]">{prospects.map((prospect) => <div key={prospect.business} className="grid gap-3 px-5 py-5 md:grid-cols-[1.3fr_1fr_1.3fr_0.9fr_40px] md:items-center"><div><p className="font-bold text-[#183b4a]">{prospect.business}</p><p className="mt-1 text-xs text-[#8d8273]">Local business</p></div><p className="text-sm text-[#625d53]">{prospect.niche}</p><p className="text-sm leading-5 text-[#625d53]">{prospect.signal}</p><button onClick={() => onWrite(prospect.business)} className={`w-fit rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.11em] ${prospect.color}`}>{prospect.status}</button><button onClick={() => onWrite(prospect.business)} className="rounded-lg p-2 text-[#8d8273] hover:bg-[#eee8dd] hover:text-[#c44832]" aria-label={`Write to ${prospect.business}`}><MoreHorizontal className="h-4 w-4" /></button></div>)}</div></div><aside className="overflow-hidden rounded-[26px] border border-[#ded6c9] bg-[#fbf8f0]"><img src={ASSETS.research} alt="Prospecting research illustration" className="h-40 w-full object-cover" /><div className="p-6"><Pill tone="warm">Research rule</Pill><h2 className="mt-4 font-display text-3xl leading-7 tracking-[-0.045em]">Be specific, respectful, and useful.</h2><p className="mt-4 text-sm leading-6 text-[#6b6257]">A visible gap is an invitation to be helpful—not a reason to embarrass someone. Name one concrete observation, then offer to send three practical ideas.</p><div className="mt-5 rounded-xl border border-[#e3d9ca] bg-[#f6f0e5] p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#9a8b78]">Good opening</p><p className="mt-2 text-sm leading-5 text-[#485854]">“I noticed your quote form does not say when a customer can expect a reply.”</p></div></div></aside></div></>; }

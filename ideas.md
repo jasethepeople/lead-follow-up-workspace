@@ -65,3 +65,9 @@ Use a compact, stacked **LF** letterform inside a vermilion stamp shape with a s
 
 ### Signature Brand Color
 **Ledger Vermilion — #C44832**
+
+## Style Decisions
+
+- Dashboard sections should read as connected briefing-sheet and ledger artifacts, not independent SaaS cards; rules, marginal labels, stamps, and indexed sequencing create the relationship.
+- The active next action is the strongest vermilion-led operating signal on each briefing screen and should remain visually distinct from ordinary navigation or secondary links.
+- Decorative marks belong to one stationery system: stamped LF, ledger numerals, marginal notes, action tabs, and verified marks share a single field-desk visual language.
