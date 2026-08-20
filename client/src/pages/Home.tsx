@@ -112,6 +112,19 @@ type WorkspaceBackup = {
   workspaces: WorkspaceSnapshot[];
 };
 
+type EncryptedWorkspaceBackup = {
+  format: "LeadFlow Encrypted Workspace Backup";
+  version: 1;
+  exportedAt: string;
+  kdf: { name: "PBKDF2"; hash: "SHA-256"; iterations: number; salt: string };
+  cipher: { name: "AES-GCM"; iv: string };
+  ciphertext: string;
+};
+
+type PendingBackup =
+  | { kind: "plain"; backup: WorkspaceBackup }
+  | { kind: "encrypted"; backup: EncryptedWorkspaceBackup };
+
 const defaultScopeFields: ScopeFields = {
   business: "[Client legal name]",
   source: "website inquiry form",
@@ -147,6 +160,20 @@ const isWorkspaceBackup = (value: unknown): value is WorkspaceBackup => {
   const backup = value as Partial<WorkspaceBackup>;
   return backup.format === "LeadFlow Workspace Backup" && backup.version === 1 && typeof backup.exportedAt === "string" && typeof backup.activeWorkspaceId === "string" && Array.isArray(backup.workspaces) && backup.workspaces.length > 0 && backup.workspaces.every(isWorkspaceSnapshot);
 };
+
+const isEncryptedWorkspaceBackup = (value: unknown): value is EncryptedWorkspaceBackup => {
+  if (!value || typeof value !== "object") return false;
+  const backup = value as Partial<EncryptedWorkspaceBackup>;
+  return backup.format === "LeadFlow Encrypted Workspace Backup" && backup.version === 1 && typeof backup.exportedAt === "string" && backup.kdf?.name === "PBKDF2" && backup.kdf.hash === "SHA-256" && typeof backup.kdf.iterations === "number" && backup.kdf.iterations >= 100_000 && typeof backup.kdf.salt === "string" && backup.cipher?.name === "AES-GCM" && typeof backup.cipher.iv === "string" && typeof backup.ciphertext === "string";
+};
+
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let text = "";
+  bytes.forEach((byte) => { text += String.fromCharCode(byte); });
+  return window.btoa(text);
+};
+
+const base64ToBytes = (value: string) => Uint8Array.from(window.atob(value), (character) => character.charCodeAt(0));
 
 const kickoffRows = [
   ["0–5", "Scope confirmation", "Confirm goal, decision-maker, and the one lead source."],
@@ -214,9 +241,13 @@ export default function Home() {
   const [active, setActive] = useState<View>("briefing");
   const [showProspectForm, setShowProspectForm] = useState(false);
   const [showWorkspaceManager, setShowWorkspaceManager] = useState(false);
+  const [showEncryptionForm, setShowEncryptionForm] = useState(false);
   const [newClientName, setNewClientName] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
-  const [pendingBackup, setPendingBackup] = useState<WorkspaceBackup | null>(null);
+  const [pendingBackup, setPendingBackup] = useState<PendingBackup | null>(null);
+  const [exportPassphrase, setExportPassphrase] = useState("");
+  const [confirmExportPassphrase, setConfirmExportPassphrase] = useState("");
+  const [importPassphrase, setImportPassphrase] = useState("");
   const [workspaces, setWorkspaces] = useState<WorkspaceSnapshot[]>([makeWorkspace("first-workspace", "Your first client")]);
   const [workspaceId, setWorkspaceId] = useState("first-workspace");
   const [prospects, setProspects] = useState(initialProspects);
@@ -232,6 +263,7 @@ export default function Home() {
 
   const currentWorkspace = workspaces.find((workspace) => workspace.id === workspaceId) ?? workspaces[0];
   const workspaceTitle = currentWorkspace.projectName.trim() || currentWorkspace.clientName;
+  const plainPendingBackup = pendingBackup?.kind === "plain" ? pendingBackup.backup : null;
 
   const loadWorkspace = (workspace: WorkspaceSnapshot) => {
     setProspects(workspace.prospects);
@@ -386,10 +418,14 @@ export default function Home() {
     setNotice("Client package downloaded. Replace the bracketed fields before sending.");
   };
 
-  const downloadCollectionBackup = () => {
+  const createCollectionSnapshot = (): WorkspaceBackup => {
     const liveActiveWorkspace: WorkspaceSnapshot = { ...currentWorkspace, prospects, doneDays, checkedKickoff, testDone, scopeFields, projectComplete };
     const collection = workspaces.map((workspace) => workspace.id === workspaceId ? liveActiveWorkspace : workspace);
-    const backup: WorkspaceBackup = { format: "LeadFlow Workspace Backup", version: 1, exportedAt: new Date().toISOString(), activeWorkspaceId: workspaceId, workspaces: collection };
+    return { format: "LeadFlow Workspace Backup", version: 1, exportedAt: new Date().toISOString(), activeWorkspaceId: workspaceId, workspaces: collection };
+  };
+
+  const downloadCollectionBackup = () => {
+    const backup = createCollectionSnapshot();
     const file = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(file);
     const link = document.createElement("a");
@@ -397,7 +433,43 @@ export default function Home() {
     link.download = `leadflow-workspace-backup-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    setNotice(`Backup downloaded with ${collection.length} client ${collection.length === 1 ? "workspace" : "workspaces"}.`);
+    setNotice(`Backup downloaded with ${backup.workspaces.length} client ${backup.workspaces.length === 1 ? "workspace" : "workspaces"}.`);
+  };
+
+  const downloadEncryptedCollectionBackup = async () => {
+    if (!window.crypto?.subtle) {
+      setNotice("This browser does not support secure encrypted backups.");
+      return;
+    }
+    if (exportPassphrase.length < 12) {
+      setNotice("Use a passphrase with at least 12 characters for an encrypted backup.");
+      return;
+    }
+    if (exportPassphrase !== confirmExportPassphrase) {
+      setNotice("The two passphrase entries do not match.");
+      return;
+    }
+    try {
+      const encoder = new TextEncoder();
+      const salt = window.crypto.getRandomValues(new Uint8Array(16));
+      const iv = window.crypto.getRandomValues(new Uint8Array(12));
+      const baseKey = await window.crypto.subtle.importKey("raw", encoder.encode(exportPassphrase), "PBKDF2", false, ["deriveKey"]);
+      const key = await window.crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 310_000 }, baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+      const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(JSON.stringify(createCollectionSnapshot())));
+      const backup: EncryptedWorkspaceBackup = { format: "LeadFlow Encrypted Workspace Backup", version: 1, exportedAt: new Date().toISOString(), kdf: { name: "PBKDF2", hash: "SHA-256", iterations: 310_000, salt: bytesToBase64(salt) }, cipher: { name: "AES-GCM", iv: bytesToBase64(iv) }, ciphertext: bytesToBase64(new Uint8Array(ciphertext)) };
+      const file = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `leadflow-encrypted-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setExportPassphrase("");
+      setConfirmExportPassphrase("");
+      setNotice("Encrypted backup downloaded. Keep the passphrase separate; it cannot be recovered.");
+    } catch {
+      setNotice("The encrypted backup could not be created. Please try again.");
+    }
   };
 
   const inspectBackupFile = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -412,9 +484,18 @@ export default function Home() {
     reader.onload = () => {
       try {
         const parsed = JSON.parse(String(reader.result)) as unknown;
-        if (!isWorkspaceBackup(parsed)) throw new Error("Invalid backup");
-        setPendingBackup(parsed);
-        setNotice(`Backup verified: ${parsed.workspaces.length} client ${parsed.workspaces.length === 1 ? "workspace" : "workspaces"} ready to restore.`);
+        if (isWorkspaceBackup(parsed)) {
+          setPendingBackup({ kind: "plain", backup: parsed });
+          setNotice(`Backup verified: ${parsed.workspaces.length} client ${parsed.workspaces.length === 1 ? "workspace" : "workspaces"} ready to restore.`);
+          return;
+        }
+        if (isEncryptedWorkspaceBackup(parsed)) {
+          setPendingBackup({ kind: "encrypted", backup: parsed });
+          setImportPassphrase("");
+          setNotice("Encrypted backup detected. Enter its passphrase to unlock it locally.");
+          return;
+        }
+        throw new Error("Invalid backup");
       } catch {
         setPendingBackup(null);
         setNotice("This file is not a valid LeadFlow workspace backup.");
@@ -424,17 +505,16 @@ export default function Home() {
     reader.readAsText(selected);
   };
 
-  const restoreBackup = (mode: "merge" | "replace") => {
-    if (!pendingBackup) return;
+  const restoreBackup = (backup: WorkspaceBackup, mode: "merge" | "replace") => {
     const usedIds = new Set(mode === "merge" ? workspaces.map((workspace) => workspace.id) : []);
-    const restored = pendingBackup.workspaces.map((workspace, index) => {
+    const restored = backup.workspaces.map((workspace, index) => {
       let id = workspace.id || `imported-${Date.now()}-${index}`;
       while (usedIds.has(id)) id = `${workspace.id || "imported"}-${Date.now()}-${index}`;
       usedIds.add(id);
       return { ...workspace, id, prospects: workspace.prospects.map((prospect) => ({ ...prospect })), scopeFields: { ...workspace.scopeFields }, doneDays: [...workspace.doneDays], checkedKickoff: [...workspace.checkedKickoff], testDone: [...workspace.testDone] };
     });
     const collection = mode === "replace" ? restored : [...workspaces, ...restored];
-    const selected = restored.find((workspace) => workspace.id === pendingBackup.activeWorkspaceId) ?? restored[0];
+    const selected = restored.find((workspace) => workspace.id === backup.activeWorkspaceId) ?? restored[0];
     setWorkspaces(collection);
     if (mode === "replace") {
       setWorkspaceId(selected.id);
@@ -443,6 +523,32 @@ export default function Home() {
     }
     setPendingBackup(null);
     setNotice(mode === "replace" ? `Restored ${restored.length} workspaces and replaced this browser collection.` : `Merged ${restored.length} imported workspaces into this browser collection.`);
+  };
+
+  const decryptPendingBackup = async () => {
+    if (!pendingBackup || pendingBackup.kind !== "encrypted") return;
+    if (!window.crypto?.subtle) {
+      setNotice("This browser does not support secure encrypted backup restoration.");
+      return;
+    }
+    if (!importPassphrase) {
+      setNotice("Enter the backup passphrase to unlock this file.");
+      return;
+    }
+    try {
+      const { backup } = pendingBackup;
+      const baseKey = await window.crypto.subtle.importKey("raw", new TextEncoder().encode(importPassphrase), "PBKDF2", false, ["deriveKey"]);
+      const key = await window.crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: base64ToBytes(backup.kdf.salt), iterations: backup.kdf.iterations }, baseKey, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+      const decrypted = await window.crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToBytes(backup.cipher.iv) }, key, base64ToBytes(backup.ciphertext));
+      const decoded = JSON.parse(new TextDecoder().decode(decrypted)) as unknown;
+      if (!isWorkspaceBackup(decoded)) throw new Error("Invalid decrypted data");
+      setImportPassphrase("");
+      setPendingBackup({ kind: "plain", backup: decoded });
+      setNotice(`Encrypted backup unlocked: ${decoded.workspaces.length} client ${decoded.workspaces.length === 1 ? "workspace" : "workspaces"} ready to restore.`);
+    } catch {
+      setImportPassphrase("");
+      setNotice("This passphrase did not unlock the backup. Check it and try again.");
+    }
   };
 
   const completeProject = () => {
@@ -524,6 +630,7 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <button onClick={downloadClientPackage} className="utility-slip hidden items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a] sm:inline-flex" aria-label="Export client package"><FilePenLine className="h-4 w-4" />Client kit</button>
               <button onClick={downloadCollectionBackup} className="utility-slip hidden items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a] md:inline-flex" aria-label="Back up all client workspaces"><Copy className="h-4 w-4" />Back up all</button>
+              <button onClick={() => setShowEncryptionForm(true)} className="utility-slip inline-flex items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a]" aria-label="Create encrypted backup"><CheckCheck className="h-4 w-4 text-[#3e7a5d]" /><span className="hidden lg:inline">Secure backup</span></button>
               <button onClick={() => setShowWorkspaceManager(true)} className="utility-slip inline-flex items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a]" aria-label="Manage client workspaces"><BriefcaseBusiness className="h-4 w-4 text-[#8b735c]" /><span className="hidden sm:inline">Client files</span></button>
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#173b49] text-xs font-extrabold text-white">YO</div>
             </div>
@@ -555,9 +662,32 @@ export default function Home() {
           </div>
         </div>
       )}
-      {showWorkspaceManager && <WorkspaceManager currentWorkspace={currentWorkspace} workspaces={workspaces} newClientName={newClientName} newProjectName={newProjectName} pendingBackup={pendingBackup} setNewClientName={setNewClientName} setNewProjectName={setNewProjectName} onClose={() => setShowWorkspaceManager(false)} onSwitch={switchWorkspace} onRename={updateWorkspaceNames} onCreate={createWorkspace} onRemove={removeWorkspace} onExportBackup={downloadCollectionBackup} onSelectBackup={inspectBackupFile} onRestoreBackup={restoreBackup} onClearPendingBackup={() => setPendingBackup(null)} />}
+      {showWorkspaceManager && <WorkspaceManager currentWorkspace={currentWorkspace} workspaces={workspaces} newClientName={newClientName} newProjectName={newProjectName} pendingBackup={plainPendingBackup} setNewClientName={setNewClientName} setNewProjectName={setNewProjectName} onClose={() => setShowWorkspaceManager(false)} onSwitch={switchWorkspace} onRename={updateWorkspaceNames} onCreate={createWorkspace} onRemove={removeWorkspace} onExportBackup={downloadCollectionBackup} onSelectBackup={inspectBackupFile} onRestoreBackup={(mode) => { if (plainPendingBackup) restoreBackup(plainPendingBackup, mode); }} onClearPendingBackup={() => setPendingBackup(null)} />}
+      {showEncryptionForm && <EncryptedBackupDialog passphrase={exportPassphrase} confirmPassphrase={confirmExportPassphrase} setPassphrase={setExportPassphrase} setConfirmPassphrase={setConfirmExportPassphrase} onClose={() => { setShowEncryptionForm(false); setExportPassphrase(""); setConfirmExportPassphrase(""); }} onExport={downloadEncryptedCollectionBackup} />}
+      {pendingBackup?.kind === "encrypted" && <EncryptedBackupUnlock backup={pendingBackup.backup} passphrase={importPassphrase} setPassphrase={setImportPassphrase} onClose={() => { setPendingBackup(null); setImportPassphrase(""); }} onUnlock={decryptPendingBackup} />}
     </div>
   );
+}
+
+function EncryptedBackupDialog({ passphrase, confirmPassphrase, setPassphrase, setConfirmPassphrase, onClose, onExport }: {
+  passphrase: string;
+  confirmPassphrase: string;
+  setPassphrase: (value: string) => void;
+  setConfirmPassphrase: (value: string) => void;
+  onClose: () => void;
+  onExport: () => Promise<void>;
+}) {
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#163643]/40 p-4 backdrop-blur-[2px] sm:items-center"><div className="w-full max-w-lg overflow-hidden rounded-[26px] border border-[#d9c6b5] bg-[#fffaf2] shadow-[0_24px_80px_rgba(24,49,59,0.28)]"><div className="bg-[#183b4a] p-6 text-[#fffaf2]"><div className="flex items-start justify-between gap-4"><div><Pill tone="warm">Encrypted collection backup</Pill><h2 className="mt-4 font-display text-3xl leading-8 tracking-[-0.045em]">Seal every client file with one passphrase.</h2></div><button onClick={onClose} className="rounded-full p-2 text-[#d1e0e1] hover:bg-white/10" aria-label="Close encrypted backup"><X className="h-5 w-5" /></button></div><p className="mt-4 text-sm leading-6 text-[#c5d4d5]">LeadFlow encrypts the backup locally with AES-256-GCM. Your passphrase is never saved, sent, or included in the file.</p></div><div className="p-6"><div className="space-y-4"><label className="block text-xs font-extrabold text-[#554f45]">Passphrase<input type="password" autoComplete="new-password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="At least 12 characters" className="mt-1.5 w-full rounded-xl border border-[#dcd2c3] bg-white px-3 py-3 text-sm text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label><label className="block text-xs font-extrabold text-[#554f45]">Confirm passphrase<input type="password" autoComplete="new-password" value={confirmPassphrase} onChange={(event) => setConfirmPassphrase(event.target.value)} placeholder="Re-enter the passphrase" className="mt-1.5 w-full rounded-xl border border-[#dcd2c3] bg-white px-3 py-3 text-sm text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label></div><div className="mt-5 rounded-xl border border-[#e2d9cb] bg-[#f7f0e6] p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[#927f69]">Important</p><p className="mt-2 text-sm leading-5 text-[#665f55]">There is no passphrase recovery. Store it in a trusted password manager or another secure location before downloading the file.</p></div><div className="mt-6 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={onClose} className="border-[#ded5c8] bg-white">Cancel</Button><Button onClick={onExport} className="action-tab rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]"><CheckCheck className="mr-2 h-4 w-4" />Create encrypted backup</Button></div></div></div></div>;
+}
+
+function EncryptedBackupUnlock({ backup, passphrase, setPassphrase, onClose, onUnlock }: {
+  backup: EncryptedWorkspaceBackup;
+  passphrase: string;
+  setPassphrase: (value: string) => void;
+  onClose: () => void;
+  onUnlock: () => Promise<void>;
+}) {
+  return <div className="fixed inset-0 z-[60] flex items-end justify-center bg-[#163643]/50 p-4 backdrop-blur-[2px] sm:items-center"><div className="w-full max-w-md overflow-hidden rounded-[26px] border border-[#d9c6b5] bg-[#fffaf2] shadow-[0_24px_80px_rgba(24,49,59,0.32)]"><div className="p-6"><div className="flex items-start justify-between gap-4"><div><Pill tone="green">Encrypted backup detected</Pill><h2 className="mt-4 font-display text-3xl leading-8 tracking-[-0.045em]">Unlock this client collection.</h2></div><button onClick={onClose} className="rounded-full p-2 text-[#70685d] hover:bg-[#eee8dd]" aria-label="Cancel encrypted restore"><X className="h-5 w-5" /></button></div><p className="mt-4 text-sm leading-6 text-[#71685d]">This file was exported {new Date(backup.exportedAt).toLocaleDateString()}. Enter its passphrase to decrypt it locally before selecting merge or replace.</p><label className="mt-5 block text-xs font-extrabold text-[#554f45]">Backup passphrase<input type="password" autoComplete="current-password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void onUnlock(); }} placeholder="Enter the backup passphrase" className="mt-1.5 w-full rounded-xl border border-[#dcd2c3] bg-white px-3 py-3 text-sm text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label><div className="mt-6 flex justify-end gap-2"><Button variant="outline" onClick={onClose} className="border-[#ded5c8] bg-white">Cancel</Button><Button onClick={onUnlock} className="action-tab rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]"><Check className="mr-2 h-4 w-4" />Unlock backup</Button></div></div></div></div>;
 }
 
 function WorkspaceManager({ currentWorkspace, workspaces, newClientName, newProjectName, pendingBackup, setNewClientName, setNewProjectName, onClose, onSwitch, onRename, onCreate, onRemove, onExportBackup, onSelectBackup, onRestoreBackup, onClearPendingBackup }: {

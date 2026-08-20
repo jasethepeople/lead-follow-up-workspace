@@ -15,3 +15,8 @@
 - [x] Add file selection, structural validation, and clear error messaging for import.
 - [x] Add safe merge and replace restoration choices with duplicate-ID handling.
 - [x] Verify export, invalid-file handling, merge, replace, persistence, and responsive controls.
+- [x] Define a versioned encrypted backup envelope using browser-native authenticated encryption.
+- [x] Add a local passphrase entry flow for encrypted backup export without persisting the passphrase.
+- [x] Add encrypted-backup detection and passphrase-based restore with clear authentication failure messaging.
+- [x] Preserve plain JSON backup import and export as an explicit non-encrypted alternative.
+- [x] Verify type safety, encrypted export and restore, wrong-passphrase handling, and responsive controls.
