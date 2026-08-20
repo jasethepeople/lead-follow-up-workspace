@@ -167,6 +167,12 @@
   background: #c44832;
 }
 
+.workspace-ticket {
+  border-top: 1px solid #dfd6c8;
+  border-bottom: 1px solid #dfd6c8;
+  background: linear-gradient(90deg, #fbf8f0, #f3ecdf);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   button, a, input, textarea { transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
   button:active { transform: scale(0.975); }

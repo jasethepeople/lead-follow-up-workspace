@@ -91,6 +91,37 @@ const initialProspects = [
   },
 ];
 
+type ScopeFields = { business: string; source: string; tool: string };
+type WorkspaceSnapshot = {
+  id: string;
+  clientName: string;
+  projectName: string;
+  prospects: typeof initialProspects;
+  doneDays: number[];
+  checkedKickoff: number[];
+  testDone: number[];
+  scopeFields: ScopeFields;
+  projectComplete: boolean;
+};
+
+const defaultScopeFields: ScopeFields = {
+  business: "[Client legal name]",
+  source: "website inquiry form",
+  tool: "their existing shared inbox",
+};
+
+const makeWorkspace = (id: string, clientName: string, projectName = ""): WorkspaceSnapshot => ({
+  id,
+  clientName,
+  projectName,
+  prospects: initialProspects.map((prospect) => ({ ...prospect })),
+  doneDays: [0, 1],
+  checkedKickoff: [0, 1],
+  testDone: [0],
+  scopeFields: { ...defaultScopeFields, business: clientName === "Untitled client" ? defaultScopeFields.business : clientName },
+  projectComplete: false,
+});
+
 const kickoffRows = [
   ["0–5", "Scope confirmation", "Confirm goal, decision-maker, and the one lead source."],
   ["5–12", "Current lead journey", "Map where inquiries arrive, who responds, and where leads disappear."],
@@ -156,6 +187,11 @@ function SectionTop({ eyebrow, title, detail, action }: { eyebrow: string; title
 export default function Home() {
   const [active, setActive] = useState<View>("briefing");
   const [showProspectForm, setShowProspectForm] = useState(false);
+  const [showWorkspaceManager, setShowWorkspaceManager] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [newProjectName, setNewProjectName] = useState("");
+  const [workspaces, setWorkspaces] = useState<WorkspaceSnapshot[]>([makeWorkspace("first-workspace", "Your first client")]);
+  const [workspaceId, setWorkspaceId] = useState("first-workspace");
   const [prospects, setProspects] = useState(initialProspects);
   const [draftBusiness, setDraftBusiness] = useState("");
   const [draftSignal, setDraftSignal] = useState("");
@@ -163,30 +199,57 @@ export default function Home() {
   const [checkedKickoff, setCheckedKickoff] = useState<number[]>([0, 1]);
   const [testDone, setTestDone] = useState<number[]>([0]);
   const [notice, setNotice] = useState("Your workspace is ready for the next move.");
-  const [scopeFields, setScopeFields] = useState({ business: "[Client legal name]", source: "website inquiry form", tool: "their existing shared inbox" });
+  const [scopeFields, setScopeFields] = useState<ScopeFields>({ ...defaultScopeFields });
   const [projectComplete, setProjectComplete] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
+  const currentWorkspace = workspaces.find((workspace) => workspace.id === workspaceId) ?? workspaces[0];
+  const workspaceTitle = currentWorkspace.projectName.trim() || currentWorkspace.clientName;
+
+  const loadWorkspace = (workspace: WorkspaceSnapshot) => {
+    setProspects(workspace.prospects);
+    setDoneDays(workspace.doneDays);
+    setCheckedKickoff(workspace.checkedKickoff);
+    setTestDone(workspace.testDone);
+    setScopeFields(workspace.scopeFields);
+    setProjectComplete(workspace.projectComplete);
+  };
+
   useEffect(() => {
-    const raw = window.localStorage.getItem("leadflow-workspace-state");
-    if (raw) {
+    const collectionRaw = window.localStorage.getItem("leadflow-workspaces");
+    const activeWorkspaceId = window.localStorage.getItem("leadflow-active-workspace");
+    if (collectionRaw) {
       try {
-        const saved = JSON.parse(raw) as {
-          prospects?: typeof initialProspects;
-          doneDays?: number[];
-          checkedKickoff?: number[];
-          testDone?: number[];
-          scopeFields?: typeof scopeFields;
-          projectComplete?: boolean;
-        };
-        if (Array.isArray(saved.prospects)) setProspects(saved.prospects);
-        if (Array.isArray(saved.doneDays)) setDoneDays(saved.doneDays);
-        if (Array.isArray(saved.checkedKickoff)) setCheckedKickoff(saved.checkedKickoff);
-        if (Array.isArray(saved.testDone)) setTestDone(saved.testDone);
-        if (saved.scopeFields) setScopeFields(saved.scopeFields);
-        if (typeof saved.projectComplete === "boolean") setProjectComplete(saved.projectComplete);
+        const savedWorkspaces = JSON.parse(collectionRaw) as WorkspaceSnapshot[];
+        if (Array.isArray(savedWorkspaces) && savedWorkspaces.length > 0) {
+          const selected = savedWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? savedWorkspaces[0];
+          setWorkspaces(savedWorkspaces);
+          setWorkspaceId(selected.id);
+          loadWorkspace(selected);
+        }
       } catch {
-        window.localStorage.removeItem("leadflow-workspace-state");
+        window.localStorage.removeItem("leadflow-workspaces");
+      }
+    } else {
+      const legacyRaw = window.localStorage.getItem("leadflow-workspace-state");
+      if (legacyRaw) {
+        try {
+          const legacy = JSON.parse(legacyRaw) as Partial<WorkspaceSnapshot>;
+          const migrated = {
+            ...makeWorkspace("first-workspace", legacy.scopeFields?.business && legacy.scopeFields.business !== defaultScopeFields.business ? legacy.scopeFields.business : "Your first client"),
+            prospects: Array.isArray(legacy.prospects) ? legacy.prospects : initialProspects,
+            doneDays: Array.isArray(legacy.doneDays) ? legacy.doneDays : [0, 1],
+            checkedKickoff: Array.isArray(legacy.checkedKickoff) ? legacy.checkedKickoff : [0, 1],
+            testDone: Array.isArray(legacy.testDone) ? legacy.testDone : [0],
+            scopeFields: legacy.scopeFields ?? defaultScopeFields,
+            projectComplete: Boolean(legacy.projectComplete),
+          };
+          setWorkspaces([migrated]);
+          loadWorkspace(migrated);
+          window.localStorage.removeItem("leadflow-workspace-state");
+        } catch {
+          window.localStorage.removeItem("leadflow-workspace-state");
+        }
       }
     }
     setHydrated(true);
@@ -194,8 +257,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem("leadflow-workspace-state", JSON.stringify({ prospects, doneDays, checkedKickoff, testDone, scopeFields, projectComplete }));
+    setWorkspaces((items) => items.map((workspace) => workspace.id === workspaceId ? { ...workspace, prospects, doneDays, checkedKickoff, testDone, scopeFields, projectComplete } : workspace));
   }, [hydrated, prospects, doneDays, checkedKickoff, testDone, scopeFields, projectComplete]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem("leadflow-workspaces", JSON.stringify(workspaces));
+    window.localStorage.setItem("leadflow-active-workspace", workspaceId);
+  }, [hydrated, workspaces, workspaceId]);
 
   const progress = Math.round((doneDays.length / deliveryDays.length) * 100);
   const activeLabel = navItems.find((item) => item.key === active)?.label ?? "Workspace";
@@ -235,13 +304,56 @@ export default function Home() {
 
   const completionReady = doneDays.length === deliveryDays.length && testDone.length === 5 && checkedKickoff.length === kickoffRows.length;
 
+  const updateWorkspaceNames = (clientName: string, projectName: string) => {
+    setWorkspaces((items) => items.map((workspace) => workspace.id === workspaceId ? { ...workspace, clientName: clientName || "Untitled client", projectName } : workspace));
+    if (scopeFields.business === currentWorkspace.clientName || scopeFields.business === defaultScopeFields.business) setScopeFields({ ...scopeFields, business: clientName || defaultScopeFields.business });
+  };
+
+  const switchWorkspace = (id: string) => {
+    const destination = workspaces.find((workspace) => workspace.id === id);
+    if (!destination || destination.id === workspaceId) return;
+    setWorkspaceId(destination.id);
+    loadWorkspace(destination);
+    setActive("briefing");
+    setShowWorkspaceManager(false);
+    setNotice(`Switched to ${destination.projectName || destination.clientName}.`);
+  };
+
+  const createWorkspace = () => {
+    const id = `workspace-${Date.now()}`;
+    const created = makeWorkspace(id, newClientName.trim() || "Untitled client", newProjectName.trim());
+    setWorkspaces((items) => [...items, created]);
+    setWorkspaceId(id);
+    loadWorkspace(created);
+    setNewClientName("");
+    setNewProjectName("");
+    setActive("briefing");
+    setNotice(`Created ${created.projectName || created.clientName}.`);
+  };
+
+  const removeWorkspace = (id: string) => {
+    if (workspaces.length === 1) {
+      setNotice("Keep at least one workspace in LeadFlow.");
+      return;
+    }
+    const remaining = workspaces.filter((workspace) => workspace.id !== id);
+    const next = remaining.find((workspace) => workspace.id !== workspaceId) ?? remaining[0];
+    setWorkspaces(remaining);
+    if (id === workspaceId) {
+      setWorkspaceId(next.id);
+      loadWorkspace(next);
+      setActive("briefing");
+    }
+    setNotice("Workspace removed from this browser.");
+  };
+
   const downloadClientPackage = () => {
     const packageText = `LEADFLOW CLIENT PACKAGE\n\n${scopeCopy}\n\nONBOARDING QUESTIONS\nBusiness name:\nPrimary project contact:\nOne lead source in scope:\nWhat happens after a new inquiry arrives?\nWho responds today?\nIdeal customer:\nRequired tone:\nWhat must not be said?\nExisting tool:\nWho can provide invitation-based access?\nBest handoff time:\n\nKICKOFF RECAP\nWe are improving [one lead source] using [tool]. Goal: [outcome]. Draft messages due [date]. Workflow test due [date]. Handoff: [date].\n\nINITIAL RESPONSE\n${messageTemplates[0].body}\n\nFOLLOW-UP\n${messageTemplates[1].body}\n\nFINAL CHECK-IN\n${messageTemplates[2].body}\n\nCLOSEOUT\nYour 7-Day Lead Follow-Up Tune-Up is complete. Attached or linked are the workflow summary, three approved message templates, the agreed tracker/workflow instructions, test confirmation, and the operating guide.`;
     const file = new Blob([packageText], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(file);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "leadflow-client-package.txt";
+    link.download = `leadflow-${workspaceTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "client"}-package.txt`;
     link.click();
     URL.revokeObjectURL(url);
     setNotice("Client package downloaded. Replace the bracketed fields before sending.");
@@ -325,6 +437,7 @@ export default function Home() {
             <div className="hidden items-center gap-2 lg:flex"><span className="h-2 w-2 rounded-full bg-[#6eaa87]" /><span className="text-xs font-bold text-[#716858]">Local workspace · progress saved in this browser</span></div>
             <div className="flex items-center gap-2">
               <button onClick={downloadClientPackage} className="hidden items-center gap-2 rounded-full border border-[#ded6c9] bg-[#f9f6ef] px-3 py-2 text-xs font-extrabold text-[#6f685c] transition hover:border-[#c44832] hover:text-[#c44832] sm:inline-flex" aria-label="Export client package"><FilePenLine className="h-4 w-4" />Export kit</button>
+              <button onClick={() => setShowWorkspaceManager(true)} className="inline-flex items-center gap-2 rounded-full border border-[#ded6c9] bg-[#f9f6ef] px-3 py-2 text-xs font-extrabold text-[#6f685c] transition hover:border-[#c44832] hover:text-[#c44832]" aria-label="Manage client workspaces"><BriefcaseBusiness className="h-4 w-4 text-[#c44832]" /><span className="hidden sm:inline">Clients</span></button>
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#173b49] text-xs font-extrabold text-white">YO</div>
             </div>
           </header>
@@ -355,8 +468,31 @@ export default function Home() {
           </div>
         </div>
       )}
+      {showWorkspaceManager && <WorkspaceManager currentWorkspace={currentWorkspace} workspaces={workspaces} newClientName={newClientName} newProjectName={newProjectName} setNewClientName={setNewClientName} setNewProjectName={setNewProjectName} onClose={() => setShowWorkspaceManager(false)} onSwitch={switchWorkspace} onRename={updateWorkspaceNames} onCreate={createWorkspace} onRemove={removeWorkspace} />}
     </div>
   );
+}
+
+function WorkspaceManager({ currentWorkspace, workspaces, newClientName, newProjectName, setNewClientName, setNewProjectName, onClose, onSwitch, onRename, onCreate, onRemove }: {
+  currentWorkspace: WorkspaceSnapshot;
+  workspaces: WorkspaceSnapshot[];
+  newClientName: string;
+  newProjectName: string;
+  setNewClientName: (value: string) => void;
+  setNewProjectName: (value: string) => void;
+  onClose: () => void;
+  onSwitch: (id: string) => void;
+  onRename: (clientName: string, projectName: string) => void;
+  onCreate: () => void;
+  onRemove: (id: string) => void;
+}) {
+  return <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#163643]/35 p-4 backdrop-blur-[2px] sm:items-center">
+    <div className="w-full max-w-4xl overflow-hidden rounded-[26px] border border-[#e2d8c8] bg-[#fffaf2] shadow-[0_24px_80px_rgba(24,49,59,0.25)]">
+      <div className="flex items-start justify-between gap-4 border-b border-[#e7dfd2] p-6"><div><p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#c44832]">Client workspace cabinet</p><h2 className="mt-2 font-display text-3xl tracking-[-0.045em]">Keep every client in its own file.</h2><p className="mt-2 max-w-xl text-sm leading-5 text-[#71685d]">Each workspace saves its own prospects, scope fields, kickoff, delivery progress, testing, and closeout state in this browser.</p></div><button onClick={onClose} className="rounded-full p-2 text-[#70685d] hover:bg-[#eee8dd]" aria-label="Close"><X className="h-5 w-5" /></button></div>
+      <div className="grid gap-0 lg:grid-cols-[0.95fr_1.05fr]"><div className="border-b border-[#e7dfd2] bg-[#f5f0e7] p-5 lg:border-b-0 lg:border-r"><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#9a8b78]">Saved client files · {workspaces.length}</p><div className="mt-4 space-y-2">{workspaces.map((workspace, index) => { const workspaceProgress = Math.round((workspace.doneDays.length / deliveryDays.length) * 100); const isCurrent = workspace.id === currentWorkspace.id; return <div key={workspace.id} className={`rounded-2xl border p-3 ${isCurrent ? "border-[#c44832] bg-[#fff8f4]" : "border-[#ded5c8] bg-[#fffaf2]"}`}><button onClick={() => onSwitch(workspace.id)} className="flex w-full items-center gap-3 text-left"><div className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-extrabold ${isCurrent ? "bg-[#c44832] text-white" : "bg-[#e7eced] text-[#183b4a]"}`}>{String(index + 1).padStart(2, "0")}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-extrabold text-[#183b4a]">{workspace.clientName}</p><p className="truncate text-[10px] font-bold text-[#8b7f70]">{workspace.projectName || "No project name"} · {workspaceProgress}% delivery</p></div>{isCurrent && <Pill tone="warm">Open</Pill>}</button><div className="mt-3 flex items-center justify-between border-t border-[#eee4d7] pt-2"><button onClick={() => onSwitch(workspace.id)} className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#b6402e]">Switch to file</button><button onClick={() => onRemove(workspace.id)} className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#998c79] hover:text-[#c44832]">Remove</button></div></div>; })}</div></div>
+        <div className="p-6"><Pill tone="ink">Name the active file</Pill><h3 className="mt-4 font-display text-3xl tracking-[-0.045em]">{currentWorkspace.clientName}</h3><div className="mt-5 space-y-4"><InputLabel label="Client or workspace name" value={currentWorkspace.clientName} onChange={(value) => onRename(value, currentWorkspace.projectName)} /><InputLabel label="Optional project name" value={currentWorkspace.projectName} onChange={(value) => onRename(currentWorkspace.clientName, value)} /></div><div className="mt-7 border-t border-[#e7dfd2] pt-6"><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#c44832]">Create another client file</p><div className="mt-4 grid gap-3 sm:grid-cols-2"><InputLabel label="Client name" value={newClientName} onChange={setNewClientName} /><InputLabel label="Optional project name" value={newProjectName} onChange={setNewProjectName} /></div><Button onClick={onCreate} className="action-tab mt-5 rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]"><Plus className="mr-2 h-4 w-4" />Create workspace</Button></div></div></div>
+    </div>
+  </div>;
 }
 
 function Briefing({ progress, setActive, doneDays }: { progress: number; setActive: (view: View) => void; doneDays: number }) {
