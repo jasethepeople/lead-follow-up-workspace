@@ -71,3 +71,6 @@ Use a compact, stacked **LF** letterform inside a vermilion stamp shape with a s
 - Dashboard sections should read as connected briefing-sheet and ledger artifacts, not independent SaaS cards; rules, marginal labels, stamps, and indexed sequencing create the relationship.
 - The active next action is the strongest vermilion-led operating signal on each briefing screen and should remain visually distinct from ordinary navigation or secondary links.
 - Decorative marks belong to one stationery system: stamped LF, ledger numerals, marginal notes, action tabs, and verified marks share a single field-desk visual language.
+- Ledger Vermilion remains reserved for active next moves, primary actions, deadlines, and urgent operating signals; quieter stationery tones carry decorative rules and labels.
+- Utility controls, workspace management, and backup actions should read as clipped paper slips or stamped field tools rather than polished application pills.
+- Brand copy uses calm field instructions for an operator under pressure: concise, action-led, and specific about the next move.

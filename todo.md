@@ -10,3 +10,8 @@
 - [x] Add a switcher that shows each workspace name, project name, and progress summary.
 - [x] Add a safe workspace removal control that preserves at least one workspace.
 - [x] Validate switching, persistence, workspace creation, removal, and responsive rendering.
+- [x] Define a versioned, portable JSON backup format for every workspace in the browser.
+- [x] Add a one-click full collection export action with a descriptive backup filename.
+- [x] Add file selection, structural validation, and clear error messaging for import.
+- [x] Add safe merge and replace restoration choices with duplicate-ID handling.
+- [x] Verify export, invalid-file handling, merge, replace, persistence, and responsive controls.

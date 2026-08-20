@@ -104,6 +104,14 @@ type WorkspaceSnapshot = {
   projectComplete: boolean;
 };
 
+type WorkspaceBackup = {
+  format: "LeadFlow Workspace Backup";
+  version: 1;
+  exportedAt: string;
+  activeWorkspaceId: string;
+  workspaces: WorkspaceSnapshot[];
+};
+
 const defaultScopeFields: ScopeFields = {
   business: "[Client legal name]",
   source: "website inquiry form",
@@ -121,6 +129,24 @@ const makeWorkspace = (id: string, clientName: string, projectName = ""): Worksp
   scopeFields: { ...defaultScopeFields, business: clientName === "Untitled client" ? defaultScopeFields.business : clientName },
   projectComplete: false,
 });
+
+const isProspectRecord = (value: unknown) => {
+  if (!value || typeof value !== "object") return false;
+  const prospect = value as Partial<(typeof initialProspects)[number]>;
+  return typeof prospect.business === "string" && typeof prospect.niche === "string" && typeof prospect.signal === "string" && typeof prospect.status === "string" && typeof prospect.color === "string";
+};
+
+const isWorkspaceSnapshot = (value: unknown): value is WorkspaceSnapshot => {
+  if (!value || typeof value !== "object") return false;
+  const workspace = value as Partial<WorkspaceSnapshot>;
+  return typeof workspace.id === "string" && typeof workspace.clientName === "string" && typeof workspace.projectName === "string" && Array.isArray(workspace.prospects) && workspace.prospects.every(isProspectRecord) && Array.isArray(workspace.doneDays) && workspace.doneDays.every((value) => Number.isInteger(value) && value >= 0 && value < deliveryDays.length) && Array.isArray(workspace.checkedKickoff) && workspace.checkedKickoff.every((value) => Number.isInteger(value) && value >= 0 && value < kickoffRows.length) && Array.isArray(workspace.testDone) && workspace.testDone.every((value) => Number.isInteger(value) && value >= 0 && value < 5) && Boolean(workspace.scopeFields) && typeof workspace.scopeFields?.business === "string" && typeof workspace.scopeFields?.source === "string" && typeof workspace.scopeFields?.tool === "string" && typeof workspace.projectComplete === "boolean";
+};
+
+const isWorkspaceBackup = (value: unknown): value is WorkspaceBackup => {
+  if (!value || typeof value !== "object") return false;
+  const backup = value as Partial<WorkspaceBackup>;
+  return backup.format === "LeadFlow Workspace Backup" && backup.version === 1 && typeof backup.exportedAt === "string" && typeof backup.activeWorkspaceId === "string" && Array.isArray(backup.workspaces) && backup.workspaces.length > 0 && backup.workspaces.every(isWorkspaceSnapshot);
+};
 
 const kickoffRows = [
   ["0–5", "Scope confirmation", "Confirm goal, decision-maker, and the one lead source."],
@@ -190,6 +216,7 @@ export default function Home() {
   const [showWorkspaceManager, setShowWorkspaceManager] = useState(false);
   const [newClientName, setNewClientName] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
+  const [pendingBackup, setPendingBackup] = useState<WorkspaceBackup | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceSnapshot[]>([makeWorkspace("first-workspace", "Your first client")]);
   const [workspaceId, setWorkspaceId] = useState("first-workspace");
   const [prospects, setProspects] = useState(initialProspects);
@@ -359,6 +386,65 @@ export default function Home() {
     setNotice("Client package downloaded. Replace the bracketed fields before sending.");
   };
 
+  const downloadCollectionBackup = () => {
+    const liveActiveWorkspace: WorkspaceSnapshot = { ...currentWorkspace, prospects, doneDays, checkedKickoff, testDone, scopeFields, projectComplete };
+    const collection = workspaces.map((workspace) => workspace.id === workspaceId ? liveActiveWorkspace : workspace);
+    const backup: WorkspaceBackup = { format: "LeadFlow Workspace Backup", version: 1, exportedAt: new Date().toISOString(), activeWorkspaceId: workspaceId, workspaces: collection };
+    const file = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `leadflow-workspace-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setNotice(`Backup downloaded with ${collection.length} client ${collection.length === 1 ? "workspace" : "workspaces"}.`);
+  };
+
+  const inspectBackupFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files?.[0];
+    event.target.value = "";
+    if (!selected) return;
+    if (selected.size > 5_000_000) {
+      setNotice("That backup file is too large. Choose a LeadFlow JSON backup under 5 MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result)) as unknown;
+        if (!isWorkspaceBackup(parsed)) throw new Error("Invalid backup");
+        setPendingBackup(parsed);
+        setNotice(`Backup verified: ${parsed.workspaces.length} client ${parsed.workspaces.length === 1 ? "workspace" : "workspaces"} ready to restore.`);
+      } catch {
+        setPendingBackup(null);
+        setNotice("This file is not a valid LeadFlow workspace backup.");
+      }
+    };
+    reader.onerror = () => setNotice("The backup file could not be read. Please try another file.");
+    reader.readAsText(selected);
+  };
+
+  const restoreBackup = (mode: "merge" | "replace") => {
+    if (!pendingBackup) return;
+    const usedIds = new Set(mode === "merge" ? workspaces.map((workspace) => workspace.id) : []);
+    const restored = pendingBackup.workspaces.map((workspace, index) => {
+      let id = workspace.id || `imported-${Date.now()}-${index}`;
+      while (usedIds.has(id)) id = `${workspace.id || "imported"}-${Date.now()}-${index}`;
+      usedIds.add(id);
+      return { ...workspace, id, prospects: workspace.prospects.map((prospect) => ({ ...prospect })), scopeFields: { ...workspace.scopeFields }, doneDays: [...workspace.doneDays], checkedKickoff: [...workspace.checkedKickoff], testDone: [...workspace.testDone] };
+    });
+    const collection = mode === "replace" ? restored : [...workspaces, ...restored];
+    const selected = restored.find((workspace) => workspace.id === pendingBackup.activeWorkspaceId) ?? restored[0];
+    setWorkspaces(collection);
+    if (mode === "replace") {
+      setWorkspaceId(selected.id);
+      loadWorkspace(selected);
+      setActive("briefing");
+    }
+    setPendingBackup(null);
+    setNotice(mode === "replace" ? `Restored ${restored.length} workspaces and replaced this browser collection.` : `Merged ${restored.length} imported workspaces into this browser collection.`);
+  };
+
   const completeProject = () => {
     if (!completionReady) {
       setNotice("Finish all 8 kickoff items, 7 delivery milestones, and 5 tests before closing the project.");
@@ -397,7 +483,7 @@ export default function Home() {
       <div className="relative z-10 mx-auto flex min-h-screen max-w-[1720px]">
         <aside className="hidden w-[272px] shrink-0 border-r border-[#d7cfc1] bg-[#f5f1e8]/95 px-5 py-6 lg:flex lg:flex-col">
           <div className="flex items-center gap-3 px-2">
-            <img src={ASSETS.logo} alt="LeadFlow monogram" className="h-11 w-11 rounded-xl object-cover shadow-[0_8px_18px_rgba(92,43,27,0.16)]" />
+            <img src={ASSETS.logo} alt="LeadFlow monogram" className="brand-stamp h-11 w-11 object-cover" />
             <div>
               <p className="font-display text-2xl leading-none tracking-[-0.05em] text-[#143948]">LeadFlow</p>
               <p className="mt-1 text-[9px] font-extrabold uppercase tracking-[0.17em] text-[#897d6d]">Field workspace</p>
@@ -428,7 +514,7 @@ export default function Home() {
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 px-4 py-4 sm:px-6 lg:px-10 lg:py-7">
+        <main className="folio-surface min-w-0 flex-1 px-4 py-4 sm:px-6 lg:px-10 lg:py-7">
           <header className="mb-6 flex items-center justify-between border-b border-[#d7cfc1] pb-4 lg:mb-8">
             <div className="flex min-w-0 items-center gap-3 lg:hidden">
               <img src={ASSETS.logo} alt="LeadFlow" className="h-10 w-10 rounded-xl object-cover" />
@@ -436,8 +522,9 @@ export default function Home() {
             </div>
             <div className="hidden items-center gap-2 lg:flex"><span className="h-2 w-2 rounded-full bg-[#6eaa87]" /><span className="text-xs font-bold text-[#716858]">Local workspace · progress saved in this browser</span></div>
             <div className="flex items-center gap-2">
-              <button onClick={downloadClientPackage} className="hidden items-center gap-2 rounded-full border border-[#ded6c9] bg-[#f9f6ef] px-3 py-2 text-xs font-extrabold text-[#6f685c] transition hover:border-[#c44832] hover:text-[#c44832] sm:inline-flex" aria-label="Export client package"><FilePenLine className="h-4 w-4" />Export kit</button>
-              <button onClick={() => setShowWorkspaceManager(true)} className="inline-flex items-center gap-2 rounded-full border border-[#ded6c9] bg-[#f9f6ef] px-3 py-2 text-xs font-extrabold text-[#6f685c] transition hover:border-[#c44832] hover:text-[#c44832]" aria-label="Manage client workspaces"><BriefcaseBusiness className="h-4 w-4 text-[#c44832]" /><span className="hidden sm:inline">Clients</span></button>
+              <button onClick={downloadClientPackage} className="utility-slip hidden items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a] sm:inline-flex" aria-label="Export client package"><FilePenLine className="h-4 w-4" />Client kit</button>
+              <button onClick={downloadCollectionBackup} className="utility-slip hidden items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a] md:inline-flex" aria-label="Back up all client workspaces"><Copy className="h-4 w-4" />Back up all</button>
+              <button onClick={() => setShowWorkspaceManager(true)} className="utility-slip inline-flex items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a]" aria-label="Manage client workspaces"><BriefcaseBusiness className="h-4 w-4 text-[#8b735c]" /><span className="hidden sm:inline">Client files</span></button>
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#173b49] text-xs font-extrabold text-white">YO</div>
             </div>
           </header>
@@ -468,16 +555,17 @@ export default function Home() {
           </div>
         </div>
       )}
-      {showWorkspaceManager && <WorkspaceManager currentWorkspace={currentWorkspace} workspaces={workspaces} newClientName={newClientName} newProjectName={newProjectName} setNewClientName={setNewClientName} setNewProjectName={setNewProjectName} onClose={() => setShowWorkspaceManager(false)} onSwitch={switchWorkspace} onRename={updateWorkspaceNames} onCreate={createWorkspace} onRemove={removeWorkspace} />}
+      {showWorkspaceManager && <WorkspaceManager currentWorkspace={currentWorkspace} workspaces={workspaces} newClientName={newClientName} newProjectName={newProjectName} pendingBackup={pendingBackup} setNewClientName={setNewClientName} setNewProjectName={setNewProjectName} onClose={() => setShowWorkspaceManager(false)} onSwitch={switchWorkspace} onRename={updateWorkspaceNames} onCreate={createWorkspace} onRemove={removeWorkspace} onExportBackup={downloadCollectionBackup} onSelectBackup={inspectBackupFile} onRestoreBackup={restoreBackup} onClearPendingBackup={() => setPendingBackup(null)} />}
     </div>
   );
 }
 
-function WorkspaceManager({ currentWorkspace, workspaces, newClientName, newProjectName, setNewClientName, setNewProjectName, onClose, onSwitch, onRename, onCreate, onRemove }: {
+function WorkspaceManager({ currentWorkspace, workspaces, newClientName, newProjectName, pendingBackup, setNewClientName, setNewProjectName, onClose, onSwitch, onRename, onCreate, onRemove, onExportBackup, onSelectBackup, onRestoreBackup, onClearPendingBackup }: {
   currentWorkspace: WorkspaceSnapshot;
   workspaces: WorkspaceSnapshot[];
   newClientName: string;
   newProjectName: string;
+  pendingBackup: WorkspaceBackup | null;
   setNewClientName: (value: string) => void;
   setNewProjectName: (value: string) => void;
   onClose: () => void;
@@ -485,12 +573,16 @@ function WorkspaceManager({ currentWorkspace, workspaces, newClientName, newProj
   onRename: (clientName: string, projectName: string) => void;
   onCreate: () => void;
   onRemove: (id: string) => void;
+  onExportBackup: () => void;
+  onSelectBackup: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onRestoreBackup: (mode: "merge" | "replace") => void;
+  onClearPendingBackup: () => void;
 }) {
   return <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#163643]/35 p-4 backdrop-blur-[2px] sm:items-center">
     <div className="w-full max-w-4xl overflow-hidden rounded-[26px] border border-[#e2d8c8] bg-[#fffaf2] shadow-[0_24px_80px_rgba(24,49,59,0.25)]">
       <div className="flex items-start justify-between gap-4 border-b border-[#e7dfd2] p-6"><div><p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#c44832]">Client workspace cabinet</p><h2 className="mt-2 font-display text-3xl tracking-[-0.045em]">Keep every client in its own file.</h2><p className="mt-2 max-w-xl text-sm leading-5 text-[#71685d]">Each workspace saves its own prospects, scope fields, kickoff, delivery progress, testing, and closeout state in this browser.</p></div><button onClick={onClose} className="rounded-full p-2 text-[#70685d] hover:bg-[#eee8dd]" aria-label="Close"><X className="h-5 w-5" /></button></div>
       <div className="grid gap-0 lg:grid-cols-[0.95fr_1.05fr]"><div className="border-b border-[#e7dfd2] bg-[#f5f0e7] p-5 lg:border-b-0 lg:border-r"><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#9a8b78]">Saved client files · {workspaces.length}</p><div className="mt-4 space-y-2">{workspaces.map((workspace, index) => { const workspaceProgress = Math.round((workspace.doneDays.length / deliveryDays.length) * 100); const isCurrent = workspace.id === currentWorkspace.id; return <div key={workspace.id} className={`rounded-2xl border p-3 ${isCurrent ? "border-[#c44832] bg-[#fff8f4]" : "border-[#ded5c8] bg-[#fffaf2]"}`}><button onClick={() => onSwitch(workspace.id)} className="flex w-full items-center gap-3 text-left"><div className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-extrabold ${isCurrent ? "bg-[#c44832] text-white" : "bg-[#e7eced] text-[#183b4a]"}`}>{String(index + 1).padStart(2, "0")}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-extrabold text-[#183b4a]">{workspace.clientName}</p><p className="truncate text-[10px] font-bold text-[#8b7f70]">{workspace.projectName || "No project name"} · {workspaceProgress}% delivery</p></div>{isCurrent && <Pill tone="warm">Open</Pill>}</button><div className="mt-3 flex items-center justify-between border-t border-[#eee4d7] pt-2"><button onClick={() => onSwitch(workspace.id)} className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#b6402e]">Switch to file</button><button onClick={() => onRemove(workspace.id)} className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#998c79] hover:text-[#c44832]">Remove</button></div></div>; })}</div></div>
-        <div className="p-6"><Pill tone="ink">Name the active file</Pill><h3 className="mt-4 font-display text-3xl tracking-[-0.045em]">{currentWorkspace.clientName}</h3><div className="mt-5 space-y-4"><InputLabel label="Client or workspace name" value={currentWorkspace.clientName} onChange={(value) => onRename(value, currentWorkspace.projectName)} /><InputLabel label="Optional project name" value={currentWorkspace.projectName} onChange={(value) => onRename(currentWorkspace.clientName, value)} /></div><div className="mt-7 border-t border-[#e7dfd2] pt-6"><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#c44832]">Create another client file</p><div className="mt-4 grid gap-3 sm:grid-cols-2"><InputLabel label="Client name" value={newClientName} onChange={setNewClientName} /><InputLabel label="Optional project name" value={newProjectName} onChange={setNewProjectName} /></div><Button onClick={onCreate} className="action-tab mt-5 rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]"><Plus className="mr-2 h-4 w-4" />Create workspace</Button></div></div></div>
+        <div className="p-6"><Pill tone="ink">Name the active file</Pill><h3 className="mt-4 font-display text-3xl tracking-[-0.045em]">{currentWorkspace.clientName}</h3><div className="mt-5 space-y-4"><InputLabel label="Client or workspace name" value={currentWorkspace.clientName} onChange={(value) => onRename(value, currentWorkspace.projectName)} /><InputLabel label="Optional project name" value={currentWorkspace.projectName} onChange={(value) => onRename(currentWorkspace.clientName, value)} /></div><div className="mt-7 border-t border-[#e7dfd2] pt-6"><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#c44832]">Create another client file</p><div className="mt-4 grid gap-3 sm:grid-cols-2"><InputLabel label="Client name" value={newClientName} onChange={setNewClientName} /><InputLabel label="Optional project name" value={newProjectName} onChange={setNewProjectName} /></div><Button onClick={onCreate} className="action-tab mt-5 rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]"><Plus className="mr-2 h-4 w-4" />Create workspace</Button></div><div className="mt-7 border-t border-[#e7dfd2] pt-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#c44832]">Full collection backup</p><p className="mt-1 text-xs leading-5 text-[#786f63]">Portable JSON for every client file in this browser.</p></div><button onClick={onExportBackup} className="rounded-xl border border-[#d8cdbd] bg-white px-3 py-2 text-xs font-extrabold text-[#183b4a] hover:border-[#c44832]"><Copy className="mr-1.5 inline h-3.5 w-3.5" />Export all</button></div><label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#cdbda9] bg-[#f9f4ea] px-4 py-3 text-xs font-extrabold text-[#635b50] transition hover:border-[#c44832] hover:text-[#b6402e]"><FilePenLine className="h-4 w-4" />Choose a LeadFlow backup<input type="file" accept="application/json,.json" onChange={onSelectBackup} className="sr-only" /></label>{pendingBackup && <div className="mt-4 rounded-xl border border-[#d8ad9f] bg-[#fff6f1] p-4"><div className="flex items-start justify-between gap-3"><div><Pill tone="warm">Backup verified</Pill><p className="mt-2 text-sm font-extrabold text-[#183b4a]">{pendingBackup.workspaces.length} client {pendingBackup.workspaces.length === 1 ? "workspace" : "workspaces"} ready to restore</p><p className="mt-1 text-xs leading-5 text-[#786f63]">Exported {new Date(pendingBackup.exportedAt).toLocaleDateString()}. Merge keeps current files; replace overwrites them.</p></div><button onClick={onClearPendingBackup} className="rounded-full p-1.5 text-[#866b62] hover:bg-[#f6e2db]" aria-label="Clear selected backup"><X className="h-4 w-4" /></button></div><div className="mt-4 flex flex-wrap gap-2"><button onClick={() => onRestoreBackup("merge")} className="rounded-xl border border-[#d4c4b4] bg-white px-3 py-2 text-xs font-extrabold text-[#183b4a] hover:border-[#c44832]">Merge into collection</button><button onClick={() => onRestoreBackup("replace")} className="rounded-xl bg-[#c44832] px-3 py-2 text-xs font-extrabold text-white hover:bg-[#a83b2a]">Replace current collection</button></div></div>}</div></div></div>
     </div>
   </div>;
 }

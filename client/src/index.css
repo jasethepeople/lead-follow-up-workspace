@@ -70,6 +70,27 @@
   mix-blend-mode: multiply;
 }
 
+.folio-surface {
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 79px, rgba(122, 105, 79, 0.055) 80px);
+  background-attachment: local;
+}
+
+.brand-stamp {
+  border: 2px solid #c44832;
+  border-radius: 2px;
+  padding: 2px;
+  background: #fffaf2;
+  box-shadow: 3px 3px 0 rgba(196,72,50,0.18), 0 8px 18px rgba(92,43,27,0.12);
+  transform: rotate(-2deg);
+}
+
+.utility-slip {
+  border: 1px solid #d7cabb;
+  background: #f9f5ec;
+  box-shadow: inset 3px 0 0 #e7ddcf;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%);
+}
+
 .action-tab {
   box-shadow: inset 4px 0 0 rgba(255,255,255,0.38), 0 10px 22px rgba(153, 53, 35, 0.18);
   clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%);
@@ -164,7 +185,7 @@
   left: 0;
   width: 28px;
   height: 3px;
-  background: #c44832;
+  background: #cbbba5;
 }
 
 .workspace-ticket {
