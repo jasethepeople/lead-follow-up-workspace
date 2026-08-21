@@ -37,4 +37,4 @@
 - [x] Add a typed confirmation dialog before a replacement restore can overwrite the current collection.
 - [x] Add browser-level tests covering client-file creation, backup selection, merge, and confirmed replacement restore.
 - [x] Verify the extended quality checks and responsive confirmation dialog.
-- [ ] Confirm the user’s GitHub destination and export the project after explicit authorization.
+- [x] Confirm the user’s GitHub destination and export the project after explicit authorization.
