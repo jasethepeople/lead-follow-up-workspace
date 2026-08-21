@@ -34,3 +34,7 @@
 - [x] Add passphrase-strength feedback in the encrypted-backup dialog and test edge cases.
 - [x] Add a continuous-integration workflow running tests, type checking, and production build.
 - [x] Run the complete quality suite and verify the responsive passphrase guidance.
+- [x] Add a typed confirmation dialog before a replacement restore can overwrite the current collection.
+- [x] Add browser-level tests covering client-file creation, backup selection, merge, and confirmed replacement restore.
+- [x] Verify the extended quality checks and responsive confirmation dialog.
+- [ ] Confirm the user’s GitHub destination and export the project after explicit authorization.
