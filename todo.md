@@ -38,3 +38,7 @@
 - [x] Add browser-level tests covering client-file creation, backup selection, merge, and confirmed replacement restore.
 - [x] Verify the extended quality checks and responsive confirmation dialog.
 - [x] Confirm the user’s GitHub destination and export the project after explicit authorization.
+- [x] Add browser-level tests for encrypted-backup unlock, wrong-passphrase rejection, and safe restoration.
+- [x] Add browser-local restore history that records mode, file type, workspace count, and timestamp without storing secrets.
+- [x] Add a downloadable diagnostic report summarizing local workspace, backup, restore-history, and browser status.
+- [x] Verify the new reliability features with unit tests, browser tests, type checking, production build, and responsive review.

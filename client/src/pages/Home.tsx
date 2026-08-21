@@ -36,8 +36,10 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { decryptWorkspaceBackup, encryptWorkspaceBackup, isEncryptedWorkspaceBackup, type EncryptedWorkspaceBackup } from "@/lib/encryptedBackup";
+import { createDiagnosticReport } from "@/lib/diagnosticReport";
 import { evaluatePassphrase } from "@/lib/passphraseStrength";
 import { canConfirmReplacement } from "@/lib/restoreConfirmation";
+import { appendRestoreHistory, isRestoreHistoryEntry, type RestoreHistoryEntry, type RestoreSource } from "@/lib/restoreHistory";
 import { prepareWorkspaceRestore } from "@/lib/workspaceRestore";
 
 type View =
@@ -117,7 +119,7 @@ type WorkspaceBackup = {
 };
 
 type PendingBackup =
-  | { kind: "plain"; backup: WorkspaceBackup }
+  | { kind: "plain"; backup: WorkspaceBackup; source: RestoreSource }
   | { kind: "encrypted"; backup: EncryptedWorkspaceBackup };
 
 const defaultScopeFields: ScopeFields = {
@@ -239,6 +241,7 @@ export default function Home() {
   const [exportPassphrase, setExportPassphrase] = useState("");
   const [confirmExportPassphrase, setConfirmExportPassphrase] = useState("");
   const [importPassphrase, setImportPassphrase] = useState("");
+  const [restoreHistory, setRestoreHistory] = useState<RestoreHistoryEntry[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceSnapshot[]>([makeWorkspace("first-workspace", "Your first client")]);
   const [workspaceId, setWorkspaceId] = useState("first-workspace");
   const [prospects, setProspects] = useState(initialProspects);
@@ -254,7 +257,7 @@ export default function Home() {
 
   const currentWorkspace = workspaces.find((workspace) => workspace.id === workspaceId) ?? workspaces[0];
   const workspaceTitle = currentWorkspace.projectName.trim() || currentWorkspace.clientName;
-  const plainPendingBackup = pendingBackup?.kind === "plain" ? pendingBackup.backup : null;
+  const plainPendingBackup = pendingBackup?.kind === "plain" ? pendingBackup : null;
 
   const loadWorkspace = (workspace: WorkspaceSnapshot) => {
     setProspects(workspace.prospects);
@@ -268,6 +271,15 @@ export default function Home() {
   useEffect(() => {
     const collectionRaw = window.localStorage.getItem("leadflow-workspaces");
     const activeWorkspaceId = window.localStorage.getItem("leadflow-active-workspace");
+    const restoreHistoryRaw = window.localStorage.getItem("leadflow-restore-history");
+    if (restoreHistoryRaw) {
+      try {
+        const savedHistory = JSON.parse(restoreHistoryRaw) as unknown;
+        if (Array.isArray(savedHistory) && savedHistory.every(isRestoreHistoryEntry)) setRestoreHistory(savedHistory);
+      } catch {
+        window.localStorage.removeItem("leadflow-restore-history");
+      }
+    }
     if (collectionRaw) {
       try {
         const savedWorkspaces = JSON.parse(collectionRaw) as WorkspaceSnapshot[];
@@ -315,6 +327,11 @@ export default function Home() {
     window.localStorage.setItem("leadflow-workspaces", JSON.stringify(workspaces));
     window.localStorage.setItem("leadflow-active-workspace", workspaceId);
   }, [hydrated, workspaces, workspaceId]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem("leadflow-restore-history", JSON.stringify(restoreHistory));
+  }, [hydrated, restoreHistory]);
 
   const progress = Math.round((doneDays.length / deliveryDays.length) * 100);
   const activeLabel = navItems.find((item) => item.key === active)?.label ?? "Workspace";
@@ -427,6 +444,26 @@ export default function Home() {
     setNotice(`Backup downloaded with ${backup.workspaces.length} client ${backup.workspaces.length === 1 ? "workspace" : "workspaces"}.`);
   };
 
+  const downloadDiagnosticReport = () => {
+    const report = createDiagnosticReport({
+      generatedAt: new Date().toISOString(),
+      activeWorkspaceId: workspaceId,
+      localStorageAvailable: typeof window.localStorage !== "undefined",
+      webCryptoAvailable: Boolean(window.crypto?.subtle),
+      workspaceCount: workspaces.length,
+      workspaces: workspaces.map((workspace) => ({ id: workspace.id, hasProjectName: Boolean(workspace.projectName.trim()), prospectCount: workspace.prospects.length, completedDeliverySteps: workspace.doneDays.length, completedKickoffSteps: workspace.checkedKickoff.length, completedTests: workspace.testDone.length, projectComplete: workspace.projectComplete })),
+      restoreHistory,
+    });
+    const file = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `leadflow-diagnostic-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setNotice("Diagnostic report downloaded. It excludes client content and every passphrase.");
+  };
+
   const downloadEncryptedCollectionBackup = async () => {
     if (!window.crypto?.subtle) {
       setNotice("This browser does not support secure encrypted backups.");
@@ -451,6 +488,7 @@ export default function Home() {
       URL.revokeObjectURL(url);
       setExportPassphrase("");
       setConfirmExportPassphrase("");
+      setShowEncryptionForm(false);
       setNotice("Encrypted backup downloaded. Keep the passphrase separate; it cannot be recovered.");
     } catch {
       setNotice("The encrypted backup could not be created. Please try again.");
@@ -471,7 +509,7 @@ export default function Home() {
       try {
         const parsed = JSON.parse(String(reader.result)) as unknown;
         if (isWorkspaceBackup(parsed)) {
-          setPendingBackup({ kind: "plain", backup: parsed });
+          setPendingBackup({ kind: "plain", backup: parsed, source: "plain" });
           setNotice(`Backup verified: ${parsed.workspaces.length} client ${parsed.workspaces.length === 1 ? "workspace" : "workspaces"} ready to restore.`);
           return;
         }
@@ -491,7 +529,7 @@ export default function Home() {
     reader.readAsText(selected);
   };
 
-  const restoreBackup = (backup: WorkspaceBackup, mode: "merge" | "replace") => {
+  const restoreBackup = (backup: WorkspaceBackup, mode: "merge" | "replace", source: RestoreSource) => {
     const { collection, restored, selected } = prepareWorkspaceRestore(workspaces, backup.workspaces, backup.activeWorkspaceId, mode, cloneWorkspace);
     setWorkspaces(collection);
     if (mode === "replace") {
@@ -501,6 +539,7 @@ export default function Home() {
     }
     setPendingBackup(null);
     setShowReplaceConfirmation(false);
+    setRestoreHistory((entries) => appendRestoreHistory(entries, { id: `restore-${Date.now()}`, at: new Date().toISOString(), mode, source, workspaceCount: restored.length }));
     setNotice(mode === "replace" ? `Restored ${restored.length} workspaces and replaced this browser collection.` : `Merged ${restored.length} imported workspaces into this browser collection.`);
   };
 
@@ -518,7 +557,7 @@ export default function Home() {
       const decoded = await decryptWorkspaceBackup(pendingBackup.backup, importPassphrase);
       if (!isWorkspaceBackup(decoded)) throw new Error("Invalid decrypted data");
       setImportPassphrase("");
-      setPendingBackup({ kind: "plain", backup: decoded });
+      setPendingBackup({ kind: "plain", backup: decoded, source: "encrypted" });
       setNotice(`Encrypted backup unlocked: ${decoded.workspaces.length} client ${decoded.workspaces.length === 1 ? "workspace" : "workspaces"} ready to restore.`);
     } catch {
       setImportPassphrase("");
@@ -605,6 +644,7 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <button onClick={downloadClientPackage} className="utility-slip hidden items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a] sm:inline-flex" aria-label="Export client package"><FilePenLine className="h-4 w-4" />Client kit</button>
               <button onClick={downloadCollectionBackup} className="utility-slip hidden items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a] md:inline-flex" aria-label="Back up all client workspaces"><Copy className="h-4 w-4" />Back up all</button>
+              <button onClick={downloadDiagnosticReport} className="utility-slip hidden items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a] xl:inline-flex" aria-label="Download diagnostic report"><Settings2 className="h-4 w-4 text-[#8b735c]" />Diagnostics</button>
               <button onClick={() => setShowEncryptionForm(true)} className="utility-slip inline-flex items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a]" aria-label="Create encrypted backup"><CheckCheck className="h-4 w-4 text-[#3e7a5d]" /><span className="hidden lg:inline">Secure backup</span></button>
               <button onClick={() => setShowWorkspaceManager(true)} className="utility-slip inline-flex items-center gap-2 px-3 py-2 text-xs font-extrabold text-[#5e5a51] transition hover:text-[#183b4a]" aria-label="Manage client workspaces"><BriefcaseBusiness className="h-4 w-4 text-[#8b735c]" /><span className="hidden sm:inline">Client files</span></button>
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#173b49] text-xs font-extrabold text-white">YO</div>
@@ -637,10 +677,11 @@ export default function Home() {
           </div>
         </div>
       )}
-      {showWorkspaceManager && <WorkspaceManager currentWorkspace={currentWorkspace} workspaces={workspaces} newClientName={newClientName} newProjectName={newProjectName} pendingBackup={plainPendingBackup} setNewClientName={setNewClientName} setNewProjectName={setNewProjectName} onClose={() => setShowWorkspaceManager(false)} onSwitch={switchWorkspace} onRename={updateWorkspaceNames} onCreate={createWorkspace} onRemove={removeWorkspace} onExportBackup={downloadCollectionBackup} onSelectBackup={inspectBackupFile} onRestoreBackup={(mode) => { if (!plainPendingBackup) return; if (mode === "replace") { setShowReplaceConfirmation(true); return; } restoreBackup(plainPendingBackup, "merge"); }} onClearPendingBackup={() => { setPendingBackup(null); setShowReplaceConfirmation(false); }} />}
+      {showWorkspaceManager && <WorkspaceManager currentWorkspace={currentWorkspace} workspaces={workspaces} newClientName={newClientName} newProjectName={newProjectName} pendingBackup={plainPendingBackup?.backup ?? null} setNewClientName={setNewClientName} setNewProjectName={setNewProjectName} onClose={() => setShowWorkspaceManager(false)} onSwitch={switchWorkspace} onRename={updateWorkspaceNames} onCreate={createWorkspace} onRemove={removeWorkspace} onExportBackup={downloadCollectionBackup} onSelectBackup={inspectBackupFile} onRestoreBackup={(mode) => { if (!plainPendingBackup) return; if (mode === "replace") { setShowReplaceConfirmation(true); return; } restoreBackup(plainPendingBackup.backup, "merge", plainPendingBackup.source); }} onClearPendingBackup={() => { setPendingBackup(null); setShowReplaceConfirmation(false); }} />}
+      {showWorkspaceManager && <RestoreLedger history={restoreHistory} onExportDiagnostics={downloadDiagnosticReport} />}
       {showEncryptionForm && <EncryptedBackupDialog passphrase={exportPassphrase} confirmPassphrase={confirmExportPassphrase} setPassphrase={setExportPassphrase} setConfirmPassphrase={setConfirmExportPassphrase} onClose={() => { setShowEncryptionForm(false); setExportPassphrase(""); setConfirmExportPassphrase(""); }} onExport={downloadEncryptedCollectionBackup} />}
       {pendingBackup?.kind === "encrypted" && <EncryptedBackupUnlock backup={pendingBackup.backup} passphrase={importPassphrase} setPassphrase={setImportPassphrase} onClose={() => { setPendingBackup(null); setImportPassphrase(""); }} onUnlock={decryptPendingBackup} />}
-      {showReplaceConfirmation && plainPendingBackup && <ReplaceCollectionDialog clientCount={plainPendingBackup.workspaces.length} onCancel={() => setShowReplaceConfirmation(false)} onConfirm={() => restoreBackup(plainPendingBackup, "replace")} />}
+      {showReplaceConfirmation && plainPendingBackup && <ReplaceCollectionDialog clientCount={plainPendingBackup.backup.workspaces.length} onCancel={() => setShowReplaceConfirmation(false)} onConfirm={() => restoreBackup(plainPendingBackup.backup, "replace", plainPendingBackup.source)} />}
     </div>
   );
 }
@@ -673,6 +714,10 @@ function ReplaceCollectionDialog({ clientCount, onCancel, onConfirm }: { clientC
   const [confirmation, setConfirmation] = useState("");
   const allowed = canConfirmReplacement(confirmation);
   return <div className="fixed inset-0 z-[70] flex items-end justify-center bg-[#163643]/60 p-4 backdrop-blur-[3px] sm:items-center"><div className="w-full max-w-md overflow-hidden rounded-[26px] border border-[#dfb0a2] bg-[#fffaf2] shadow-[0_24px_80px_rgba(24,49,59,0.38)]"><div className="bg-[#7d2d20] p-6 text-[#fffaf2]"><Pill tone="warm">Destructive restore</Pill><h2 className="mt-4 font-display text-3xl leading-8 tracking-[-0.045em]">Replace this browser collection?</h2><p className="mt-3 text-sm leading-6 text-[#f8d9d1]">This will remove the current client files in this browser and replace them with {clientCount} imported {clientCount === 1 ? "file" : "files"}. This cannot be undone without another backup.</p></div><div className="p-6"><label className="block text-xs font-extrabold text-[#554f45]">Type REPLACE to continue<input aria-label="Type REPLACE to continue" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="REPLACE" className="mt-1.5 w-full rounded-xl border border-[#d8c5b6] bg-white px-3 py-3 text-sm font-bold tracking-[0.12em] text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label><div className="mt-6 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={onCancel} className="border-[#ded5c8] bg-white">Keep current files</Button><Button disabled={!allowed} onClick={onConfirm} className="action-tab rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]">Replace all client files</Button></div></div></div></div>;
+}
+
+function RestoreLedger({ history, onExportDiagnostics }: { history: RestoreHistoryEntry[]; onExportDiagnostics: () => void }) {
+  return <aside className="pointer-events-none fixed bottom-5 left-5 right-5 z-[45] mx-auto max-w-md border border-[#d7c6b7] bg-[#fffaf2] p-4 shadow-[0_18px_48px_rgba(45,39,29,0.22)] lg:bottom-7 lg:left-auto lg:right-8"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#9a8b78]">Local restore ledger</p><p className="mt-1 text-xs text-[#70675b]">Secret-free history, saved in this browser.</p></div><button onClick={onExportDiagnostics} className="pointer-events-auto action-tab bg-[#183b4a] px-3 py-2 text-xs font-extrabold text-white hover:bg-[#0f2e3a]"><Settings2 className="mr-1.5 inline h-3.5 w-3.5" />Diagnostics</button></div>{history.length ? <div className="mt-3 space-y-2">{history.slice(0, 3).map((entry) => <div key={entry.id} className="flex items-center justify-between gap-3 border-l-2 border-[#d8cdbd] bg-[#f8f3e9] px-3 py-2 text-xs"><span className="font-extrabold text-[#183b4a]">{entry.source === "encrypted" ? "Encrypted" : "Plain"} · {entry.mode}</span><span className="text-right text-[#766d61]">{entry.workspaceCount} {entry.workspaceCount === 1 ? "file" : "files"} · {new Date(entry.at).toLocaleDateString()}</span></div>)}</div> : <p className="mt-3 text-xs leading-5 text-[#786f63]">No restore events saved in this browser yet.</p>}</aside>;
 }
 
 function WorkspaceManager({ currentWorkspace, workspaces, newClientName, newProjectName, pendingBackup, setNewClientName, setNewProjectName, onClose, onSwitch, onRename, onCreate, onRemove, onExportBackup, onSelectBackup, onRestoreBackup, onClearPendingBackup }: {
