@@ -36,6 +36,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { decryptWorkspaceBackup, encryptWorkspaceBackup, isEncryptedWorkspaceBackup, type EncryptedWorkspaceBackup } from "@/lib/encryptedBackup";
+import { evaluatePassphrase } from "@/lib/passphraseStrength";
+import { prepareWorkspaceRestore } from "@/lib/workspaceRestore";
 
 type View =
   | "briefing"
@@ -133,6 +135,15 @@ const makeWorkspace = (id: string, clientName: string, projectName = ""): Worksp
   testDone: [0],
   scopeFields: { ...defaultScopeFields, business: clientName === "Untitled client" ? defaultScopeFields.business : clientName },
   projectComplete: false,
+});
+
+const cloneWorkspace = (workspace: WorkspaceSnapshot): WorkspaceSnapshot => ({
+  ...workspace,
+  prospects: workspace.prospects.map((prospect) => ({ ...prospect })),
+  scopeFields: { ...workspace.scopeFields },
+  doneDays: [...workspace.doneDays],
+  checkedKickoff: [...workspace.checkedKickoff],
+  testDone: [...workspace.testDone],
 });
 
 const isProspectRecord = (value: unknown) => {
@@ -478,15 +489,7 @@ export default function Home() {
   };
 
   const restoreBackup = (backup: WorkspaceBackup, mode: "merge" | "replace") => {
-    const usedIds = new Set(mode === "merge" ? workspaces.map((workspace) => workspace.id) : []);
-    const restored = backup.workspaces.map((workspace, index) => {
-      let id = workspace.id || `imported-${Date.now()}-${index}`;
-      while (usedIds.has(id)) id = `${workspace.id || "imported"}-${Date.now()}-${index}`;
-      usedIds.add(id);
-      return { ...workspace, id, prospects: workspace.prospects.map((prospect) => ({ ...prospect })), scopeFields: { ...workspace.scopeFields }, doneDays: [...workspace.doneDays], checkedKickoff: [...workspace.checkedKickoff], testDone: [...workspace.testDone] };
-    });
-    const collection = mode === "replace" ? restored : [...workspaces, ...restored];
-    const selected = restored.find((workspace) => workspace.id === backup.activeWorkspaceId) ?? restored[0];
+    const { collection, restored, selected } = prepareWorkspaceRestore(workspaces, backup.workspaces, backup.activeWorkspaceId, mode, cloneWorkspace);
     setWorkspaces(collection);
     if (mode === "replace") {
       setWorkspaceId(selected.id);
@@ -645,7 +648,10 @@ function EncryptedBackupDialog({ passphrase, confirmPassphrase, setPassphrase, s
   onClose: () => void;
   onExport: () => Promise<void>;
 }) {
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#163643]/40 p-4 backdrop-blur-[2px] sm:items-center"><div className="w-full max-w-lg overflow-hidden rounded-[26px] border border-[#d9c6b5] bg-[#fffaf2] shadow-[0_24px_80px_rgba(24,49,59,0.28)]"><div className="bg-[#183b4a] p-6 text-[#fffaf2]"><div className="flex items-start justify-between gap-4"><div><Pill tone="warm">Encrypted collection backup</Pill><h2 className="mt-4 font-display text-3xl leading-8 tracking-[-0.045em]">Seal every client file with one passphrase.</h2></div><button onClick={onClose} className="rounded-full p-2 text-[#d1e0e1] hover:bg-white/10" aria-label="Close encrypted backup"><X className="h-5 w-5" /></button></div><p className="mt-4 text-sm leading-6 text-[#c5d4d5]">LeadFlow encrypts the backup locally with AES-256-GCM. Your passphrase is never saved, sent, or included in the file.</p></div><div className="p-6"><div className="space-y-4"><label className="block text-xs font-extrabold text-[#554f45]">Passphrase<input type="password" autoComplete="new-password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="At least 12 characters" className="mt-1.5 w-full rounded-xl border border-[#dcd2c3] bg-white px-3 py-3 text-sm text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label><label className="block text-xs font-extrabold text-[#554f45]">Confirm passphrase<input type="password" autoComplete="new-password" value={confirmPassphrase} onChange={(event) => setConfirmPassphrase(event.target.value)} placeholder="Re-enter the passphrase" className="mt-1.5 w-full rounded-xl border border-[#dcd2c3] bg-white px-3 py-3 text-sm text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label></div><div className="mt-5 rounded-xl border border-[#e2d9cb] bg-[#f7f0e6] p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[#927f69]">Important</p><p className="mt-2 text-sm leading-5 text-[#665f55]">There is no passphrase recovery. Store it in a trusted password manager or another secure location before downloading the file.</p></div><div className="mt-6 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={onClose} className="border-[#ded5c8] bg-white">Cancel</Button><Button onClick={onExport} className="action-tab rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]"><CheckCheck className="mr-2 h-4 w-4" />Create encrypted backup</Button></div></div></div></div>;
+  const strength = evaluatePassphrase(passphrase);
+  const confirmationMatches = !confirmPassphrase || passphrase === confirmPassphrase;
+  const toneStyles = { muted: "bg-[#eee5d8]", warm: "bg-[#d9826c]", ink: "bg-[#2f6170]", green: "bg-[#3e7a5d]" };
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#163643]/40 p-4 backdrop-blur-[2px] sm:items-center"><div className="w-full max-w-lg overflow-hidden rounded-[26px] border border-[#d9c6b5] bg-[#fffaf2] shadow-[0_24px_80px_rgba(24,49,59,0.28)]"><div className="bg-[#183b4a] p-6 text-[#fffaf2]"><div className="flex items-start justify-between gap-4"><div><Pill tone="warm">Encrypted collection backup</Pill><h2 className="mt-4 font-display text-3xl leading-8 tracking-[-0.045em]">Seal every client file with one passphrase.</h2></div><button onClick={onClose} className="rounded-full p-2 text-[#d1e0e1] hover:bg-white/10" aria-label="Close encrypted backup"><X className="h-5 w-5" /></button></div><p className="mt-4 text-sm leading-6 text-[#c5d4d5]">LeadFlow encrypts the backup locally with AES-256-GCM. Your passphrase is never saved, sent, or included in the file.</p></div><div className="p-6"><div className="space-y-4"><label className="block text-xs font-extrabold text-[#554f45]">Passphrase<input type="password" autoComplete="new-password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="At least 12 characters" className="mt-1.5 w-full rounded-xl border border-[#dcd2c3] bg-white px-3 py-3 text-sm text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label><div className="rounded-xl border border-[#e2d9cb] bg-[#f8f2e8] p-3" aria-live="polite"><div className="flex items-center justify-between text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#756a5c]"><span>Passphrase strength</span><span>{strength.label}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e3dbcf]"><div className={`h-full rounded-full transition-all ${toneStyles[strength.tone]}`} style={{ width: `${strength.percentage}%` }} /></div><p className="mt-2 text-xs leading-5 text-[#6c6357]">{strength.hint}</p></div><label className="block text-xs font-extrabold text-[#554f45]">Confirm passphrase<input type="password" autoComplete="new-password" value={confirmPassphrase} onChange={(event) => setConfirmPassphrase(event.target.value)} placeholder="Re-enter the passphrase" className="mt-1.5 w-full rounded-xl border border-[#dcd2c3] bg-white px-3 py-3 text-sm text-[#183b4a] outline-none focus:border-[#c44832] focus:ring-4 focus:ring-[#c44832]/10" /></label>{confirmPassphrase && !confirmationMatches && <p className="text-xs font-bold text-[#b6402e]">The two passphrase entries do not match.</p>}</div><div className="mt-5 rounded-xl border border-[#e2d9cb] bg-[#f7f0e6] p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[#927f69]">Important</p><p className="mt-2 text-sm leading-5 text-[#665f55]">There is no passphrase recovery. Store it in a trusted password manager or another secure location before downloading the file.</p></div><div className="mt-6 flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={onClose} className="border-[#ded5c8] bg-white">Cancel</Button><Button disabled={!strength.isReady || !confirmPassphrase || !confirmationMatches} onClick={onExport} className="action-tab rounded-none bg-[#c44832] text-white hover:bg-[#a83b2a]"><CheckCheck className="mr-2 h-4 w-4" />Create encrypted backup</Button></div></div></div></div>;
 }
 
 function EncryptedBackupUnlock({ backup, passphrase, setPassphrase, onClose, onUnlock }: {

@@ -24,3 +24,13 @@
 - [x] Add automated tests for envelope creation, validation, correct-passphrase decryption, and incorrect-passphrase rejection.
 - [x] Assert that encrypted exports never contain the source passphrase or readable workspace payload.
 - [x] Add a repeatable test script and run it with the type checker and production build.
+- [x] Write plain-language instructions for creating and managing client workspaces.
+- [x] Document the daily prospect-to-handoff workflow and the completion gate.
+- [x] Document plain and encrypted collection backup, restore, merge, and replace safely.
+- [x] Document the automated test, type-check, and production-build commands.
+- [x] Package the completed guide as a downloadable Markdown document.
+- [x] Extract restore merge and replace behavior into a testable collection utility.
+- [x] Add automated tests for merge, replacement, active-workspace selection, and duplicate-ID remapping.
+- [x] Add passphrase-strength feedback in the encrypted-backup dialog and test edge cases.
+- [x] Add a continuous-integration workflow running tests, type checking, and production build.
+- [x] Run the complete quality suite and verify the responsive passphrase guidance.
