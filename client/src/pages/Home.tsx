@@ -35,6 +35,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { decryptWorkspaceBackup, encryptWorkspaceBackup, isEncryptedWorkspaceBackup, type EncryptedWorkspaceBackup } from "@/lib/encryptedBackup";
 
 type View =
   | "briefing"
@@ -112,15 +113,6 @@ type WorkspaceBackup = {
   workspaces: WorkspaceSnapshot[];
 };
 
-type EncryptedWorkspaceBackup = {
-  format: "LeadFlow Encrypted Workspace Backup";
-  version: 1;
-  exportedAt: string;
-  kdf: { name: "PBKDF2"; hash: "SHA-256"; iterations: number; salt: string };
-  cipher: { name: "AES-GCM"; iv: string };
-  ciphertext: string;
-};
-
 type PendingBackup =
   | { kind: "plain"; backup: WorkspaceBackup }
   | { kind: "encrypted"; backup: EncryptedWorkspaceBackup };
@@ -160,20 +152,6 @@ const isWorkspaceBackup = (value: unknown): value is WorkspaceBackup => {
   const backup = value as Partial<WorkspaceBackup>;
   return backup.format === "LeadFlow Workspace Backup" && backup.version === 1 && typeof backup.exportedAt === "string" && typeof backup.activeWorkspaceId === "string" && Array.isArray(backup.workspaces) && backup.workspaces.length > 0 && backup.workspaces.every(isWorkspaceSnapshot);
 };
-
-const isEncryptedWorkspaceBackup = (value: unknown): value is EncryptedWorkspaceBackup => {
-  if (!value || typeof value !== "object") return false;
-  const backup = value as Partial<EncryptedWorkspaceBackup>;
-  return backup.format === "LeadFlow Encrypted Workspace Backup" && backup.version === 1 && typeof backup.exportedAt === "string" && backup.kdf?.name === "PBKDF2" && backup.kdf.hash === "SHA-256" && typeof backup.kdf.iterations === "number" && backup.kdf.iterations >= 100_000 && typeof backup.kdf.salt === "string" && backup.cipher?.name === "AES-GCM" && typeof backup.cipher.iv === "string" && typeof backup.ciphertext === "string";
-};
-
-const bytesToBase64 = (bytes: Uint8Array) => {
-  let text = "";
-  bytes.forEach((byte) => { text += String.fromCharCode(byte); });
-  return window.btoa(text);
-};
-
-const base64ToBytes = (value: string) => Uint8Array.from(window.atob(value), (character) => character.charCodeAt(0));
 
 const kickoffRows = [
   ["0–5", "Scope confirmation", "Confirm goal, decision-maker, and the one lead source."],
@@ -450,13 +428,7 @@ export default function Home() {
       return;
     }
     try {
-      const encoder = new TextEncoder();
-      const salt = window.crypto.getRandomValues(new Uint8Array(16));
-      const iv = window.crypto.getRandomValues(new Uint8Array(12));
-      const baseKey = await window.crypto.subtle.importKey("raw", encoder.encode(exportPassphrase), "PBKDF2", false, ["deriveKey"]);
-      const key = await window.crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 310_000 }, baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-      const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(JSON.stringify(createCollectionSnapshot())));
-      const backup: EncryptedWorkspaceBackup = { format: "LeadFlow Encrypted Workspace Backup", version: 1, exportedAt: new Date().toISOString(), kdf: { name: "PBKDF2", hash: "SHA-256", iterations: 310_000, salt: bytesToBase64(salt) }, cipher: { name: "AES-GCM", iv: bytesToBase64(iv) }, ciphertext: bytesToBase64(new Uint8Array(ciphertext)) };
+      const backup = await encryptWorkspaceBackup(createCollectionSnapshot(), exportPassphrase);
       const file = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(file);
       const link = document.createElement("a");
@@ -536,11 +508,7 @@ export default function Home() {
       return;
     }
     try {
-      const { backup } = pendingBackup;
-      const baseKey = await window.crypto.subtle.importKey("raw", new TextEncoder().encode(importPassphrase), "PBKDF2", false, ["deriveKey"]);
-      const key = await window.crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: base64ToBytes(backup.kdf.salt), iterations: backup.kdf.iterations }, baseKey, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
-      const decrypted = await window.crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToBytes(backup.cipher.iv) }, key, base64ToBytes(backup.ciphertext));
-      const decoded = JSON.parse(new TextDecoder().decode(decrypted)) as unknown;
+      const decoded = await decryptWorkspaceBackup(pendingBackup.backup, importPassphrase);
       if (!isWorkspaceBackup(decoded)) throw new Error("Invalid decrypted data");
       setImportPassphrase("");
       setPendingBackup({ kind: "plain", backup: decoded });

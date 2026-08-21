@@ -20,3 +20,7 @@
 - [x] Add encrypted-backup detection and passphrase-based restore with clear authentication failure messaging.
 - [x] Preserve plain JSON backup import and export as an explicit non-encrypted alternative.
 - [x] Verify type safety, encrypted export and restore, wrong-passphrase handling, and responsive controls.
+- [x] Extract browser-native encrypted-backup logic into a testable module.
+- [x] Add automated tests for envelope creation, validation, correct-passphrase decryption, and incorrect-passphrase rejection.
+- [x] Assert that encrypted exports never contain the source passphrase or readable workspace payload.
+- [x] Add a repeatable test script and run it with the type checker and production build.
